@@ -43,7 +43,7 @@ public:
 
     /** Distance threshold in meters for successful capture */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rules")
-    float CaptureDistanceThresholdMeters = 3.0f;
+    float CaptureDistanceThresholdMeters = 2.2f;
 
     /** Enable autonomous AI for both Seeker and Hider immediately on Play */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rules|AI")
@@ -97,6 +97,8 @@ private:
     float SeekerTurnLockTimer = 0.0f;
     float HiderTurnSign = 1.0f;
     float HiderTurnLockTimer = 0.0f;
+    float HiderJukeSign = 1.0f;
+    float HiderJukeTimer = 0.0f;
     int32 CurrentWaypointIdx = 0;
     FVector LastKnownHiderPos = FVector::ZeroVector;
     FVector LastSeekerCheckPos = FVector::ZeroVector;

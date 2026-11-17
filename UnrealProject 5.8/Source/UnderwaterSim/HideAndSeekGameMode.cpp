@@ -403,15 +403,30 @@ void AHideAndSeekGameMode::UpdateAutonomousAI(float DeltaTime)
     const FVector HiderPos  = HiderDrone->GetActorLocation();
     CurrentDistanceBetweenDrones = FVector::Dist(SeekerPos, HiderPos) / 100.0f;
 
-    // ── 1. Hider Autonomous Evasion & Building-Cover AI ──
+    // ── 1. Hider Autonomous Evasion, Cover & Juking ("Gocek") AI ──
     {
         RetargetCoverTimer += DeltaTime;
+        HiderJukeTimer += DeltaTime;
         const float DistToCover = FVector::Dist(HiderPos, CurrentHidingSpot);
 
-        // Pick a new building to hide behind if Seeker gets too close, or every 14s, or if already exposed
+        // Check if Seeker currently has line-of-sight to Hider
+        bool bSeekerCanSeeHider = false;
+        if (CurrentPhase == EGameStatePhase::SeekingPhase && CurrentDistanceBetweenDrones <= 24.0f && GetWorld())
+        {
+            FHitResult SightHit;
+            FCollisionQueryParams SightParams;
+            SightParams.AddIgnoredActor(SeekerDrone);
+            SightParams.AddIgnoredActor(HiderDrone);
+            bSeekerCanSeeHider = !GetWorld()->LineTraceSingleByChannel(
+                SightHit, SeekerPos, HiderPos, ECC_Visibility, SightParams);
+        }
+
+        const bool bInChase = (CurrentPhase == EGameStatePhase::SeekingPhase) &&
+                              (bSeekerCanSeeHider || CurrentDistanceBetweenDrones < 18.0f);
+
         if (CurrentHidingSpot.IsZero() ||
-            (CurrentPhase == EGameStatePhase::SeekingPhase && CurrentDistanceBetweenDrones < 14.0f && RetargetCoverTimer > 3.5f) ||
-            RetargetCoverTimer > 16.0f)
+            (bInChase && RetargetCoverTimer > 4.0f) ||
+            RetargetCoverTimer > 18.0f)
         {
             CurrentHidingSpot = PickBestHidingSpot();
             RetargetCoverTimer = 0.0f;
@@ -420,7 +435,25 @@ void AHideAndSeekGameMode::UpdateAutonomousAI(float DeltaTime)
         FVector HiderDir = FVector::ZeroVector;
         float HiderSpeedCm = 0.0f;
 
-        if (DistToCover > 200.0f)
+        if (bInChase)
+        {
+            // Active "gocek-gocek" evasion: weave perpendicular to Seeker's approach while sprinting to next cover!
+            if (HiderJukeTimer >= 2.2f)
+            {
+                HiderJukeSign = -HiderJukeSign;
+                HiderJukeTimer = 0.0f;
+            }
+            const FVector Away = (HiderPos - SeekerPos).GetSafeNormal2D();
+            const FVector Side(-Away.Y, Away.X, 0.0f);
+            const FVector ToCover = (CurrentHidingSpot - HiderPos).GetSafeNormal();
+            const float JukeWeight = (CurrentDistanceBetweenDrones < 10.0f) ? 1.15f : 0.70f;
+            const float VertJuke = 0.30f * FMath::Sin(RoundTimer * 1.4f);
+
+            HiderDir = (Away * 0.75f + ToCover * 0.65f + Side * (HiderJukeSign * JukeWeight) + FVector(0.0f, 0.0f, VertJuke)).GetSafeNormal();
+            HiderDir = ComputeObstacleAvoidance(HiderDrone, HiderDir, HiderTurnSign, HiderTurnLockTimer, DeltaTime);
+            HiderSpeedCm = 525.0f;
+        }
+        else if (DistToCover > 200.0f)
         {
             HiderDir = (CurrentHidingSpot - HiderPos).GetSafeNormal();
             HiderDir = ComputeObstacleAvoidance(HiderDrone, HiderDir, HiderTurnSign, HiderTurnLockTimer, DeltaTime);
@@ -501,18 +534,18 @@ void AHideAndSeekGameMode::UpdateAutonomousAI(float DeltaTime)
     }
 
     FVector GoalPos = LastKnownHiderPos;
-    float SeekerSpeedCm = 550.0f;
+    float SeekerSpeedCm = 520.0f;
 
     if (SeekerAIState == TEXT("APPROACHING"))
     {
-        // Lead-pursuit turbo intercept!
-        SeekerSpeedCm = 620.0f;
+        // Slightly faster than Hider (560 vs 525 cm/s) so chases are tense and last longer!
+        SeekerSpeedCm = 560.0f;
         const FVector HiderVel = HiderDrone->GetVelocityMetersPerSec() * 100.0f;
-        GoalPos = LastKnownHiderPos + HiderVel * 0.65f;
+        GoalPos = LastKnownHiderPos + HiderVel * 0.45f;
     }
     else if (SeekerAIState == TEXT("DETECTED"))
     {
-        SeekerSpeedCm = 540.0f;
+        SeekerSpeedCm = 530.0f;
     }
     else if (SeekerAIState == TEXT("SEARCHING") || SeekerAIState == TEXT("LOST"))
     {
