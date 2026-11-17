@@ -279,15 +279,8 @@ void AHideAndSeekGameMode::Tick(float DeltaTime)
 
     if (CurrentPhase == EGameStatePhase::SeekerWon || CurrentPhase == EGameStatePhase::HiderWon)
     {
-        if (SeekerDrone)
-        {
-            SeekerDrone->SetAutonomousVelocity(FVector::ZeroVector, SeekerDrone->GetActorRotation().Yaw);
-            if (CurrentPhase == EGameStatePhase::SeekerWon)
-            {
-                SeekerDrone->SetGrabberState(0.0f, DeltaTime); // Clamp shut around captured Hider!
-            }
-        }
-        if (HiderDrone) HiderDrone->SetAutonomousVelocity(FVector::ZeroVector, HiderDrone->GetActorRotation().Yaw);
+        if (SeekerDrone) SeekerDrone->SetAutonomousVelocity(FVector::ZeroVector, SeekerDrone->GetActorRotation().Yaw);
+        if (HiderDrone)  HiderDrone->SetAutonomousVelocity(FVector::ZeroVector, HiderDrone->GetActorRotation().Yaw);
 
         if (GEngine)
         {
@@ -634,11 +627,6 @@ void AHideAndSeekGameMode::UpdateAutonomousAI(float DeltaTime)
     SeekerDir = ComputeObstacleAvoidance(SeekerDrone, SeekerDir, SeekerTurnSign, SeekerTurnLockTimer, DeltaTime);
     const float SeekerYaw = SeekerDir.Rotation().Yaw;
     SeekerDrone->SetAutonomousVelocity(SeekerDir * SeekerSpeedCm, SeekerYaw);
-
-    // Animate Seeker front grabber claw: open wide when closing in (< 8m), snap shut on capture!
-    const float GrabTarget = (CurrentDistanceBetweenDrones <= CaptureDistanceThresholdMeters + 0.6f) ? 0.0f :
-                             (SeekerAIState == TEXT("APPROACHING") && CurrentDistanceBetweenDrones < 8.5f) ? 1.0f : 0.25f;
-    SeekerDrone->SetGrabberState(GrabTarget, DeltaTime);
 }
 
 void AHideAndSeekGameMode::CheckCaptureCondition()
