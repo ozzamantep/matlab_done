@@ -215,6 +215,46 @@ FVector AHideAndSeekGameMode::PickBestHidingSpot() const
     return FVector(Origin.X + Extent.X + 320.0f, Origin.Y, FMath::Clamp(Origin.Z, -1400.0f, -450.0f));
 }
 
+FVector AHideAndSeekGameMode::PickBuildingOrbitSpot() const
+{
+    if (!HiderDrone || !SeekerDrone || HidingCoverActors.Num() == 0)
+    {
+        return PickBestHidingSpot();
+    }
+
+    const FVector HiderPos = HiderDrone->GetActorLocation();
+    const FVector SeekerPos = SeekerDrone->GetActorLocation();
+
+    // Find nearest building to Hider so it can loop around it and break line-of-sight
+    AActor* NearestCover = nullptr;
+    float BestDist = FLT_MAX;
+    for (AActor* Cover : HidingCoverActors)
+    {
+        if (!Cover) continue;
+        const float D = FVector::Dist(HiderPos, Cover->GetActorLocation());
+        if (D < BestDist)
+        {
+            BestDist = D;
+            NearestCover = Cover;
+        }
+    }
+
+    if (!NearestCover) return PickBestHidingSpot();
+
+    FVector Origin, Extent;
+    NearestCover->GetActorBounds(true, Origin, Extent);
+    const float Radius = FMath::Max(Extent.X, Extent.Y) + 190.0f;
+
+    // Orbit 110 degrees around the building away from Seeker
+    FVector FromCenterToHider = (HiderPos - Origin).GetSafeNormal2D();
+    if (FromCenterToHider.IsNearlyZero()) FromCenterToHider = FVector(1.0f, 0.0f, 0.0f);
+    const FVector OrbitDir = FromCenterToHider.RotateAngleAxis(110.0f * HiderJukeSign, FVector::UpVector);
+
+    FVector OrbitSpot = Origin + OrbitDir * Radius;
+    OrbitSpot.Z = FMath::Clamp(Origin.Z + 70.0f, -1350.0f, -450.0f);
+    return OrbitSpot;
+}
+
 void AHideAndSeekGameMode::StartNewMatch()
 {
     RoundTimer = 0.0f;
@@ -437,21 +477,24 @@ void AHideAndSeekGameMode::UpdateAutonomousAI(float DeltaTime)
 
         if (bInChase)
         {
-            // Active "gocek-gocek" evasion: weave perpendicular to Seeker's approach while sprinting to next cover!
-            if (HiderJukeTimer >= 2.2f)
+            // Active "gocek-gocek" around nearest building + adrenaline burst to break line-of-sight and escape!
+            if (HiderJukeTimer >= 1.4f)
             {
                 HiderJukeSign = -HiderJukeSign;
                 HiderJukeTimer = 0.0f;
             }
+
+            const FVector OrbitSpot = PickBuildingOrbitSpot();
+            const FVector ToOrbit = (OrbitSpot - HiderPos).GetSafeNormal();
             const FVector Away = (HiderPos - SeekerPos).GetSafeNormal2D();
             const FVector Side(-Away.Y, Away.X, 0.0f);
-            const FVector ToCover = (CurrentHidingSpot - HiderPos).GetSafeNormal();
-            const float JukeWeight = (CurrentDistanceBetweenDrones < 10.0f) ? 1.15f : 0.70f;
-            const float VertJuke = 0.30f * FMath::Sin(RoundTimer * 1.4f);
+            const float JukeWeight = (CurrentDistanceBetweenDrones < 12.0f) ? 1.25f : 0.75f;
+            const float VertJuke = 0.35f * FMath::Sin(RoundTimer * 1.8f);
 
-            HiderDir = (Away * 0.75f + ToCover * 0.65f + Side * (HiderJukeSign * JukeWeight) + FVector(0.0f, 0.0f, VertJuke)).GetSafeNormal();
+            HiderDir = (ToOrbit * 0.85f + Away * 0.65f + Side * (HiderJukeSign * JukeWeight) + FVector(0.0f, 0.0f, VertJuke)).GetSafeNormal();
             HiderDir = ComputeObstacleAvoidance(HiderDrone, HiderDir, HiderTurnSign, HiderTurnLockTimer, DeltaTime);
-            HiderSpeedCm = 525.0f;
+            // Adrenaline burst when Seeker gets close so Hider can genuinely juke & escape!
+            HiderSpeedCm = (CurrentDistanceBetweenDrones < 12.0f) ? 575.0f : 540.0f;
         }
         else if (DistToCover > 200.0f)
         {
@@ -516,15 +559,16 @@ void AHideAndSeekGameMode::UpdateAutonomousAI(float DeltaTime)
     }
 
     // State Machine: SEARCHING -> DETECTED -> APPROACHING -> LOST -> FOUND
+    // Short 2.2s memory window so if Hider loops behind a building and breaks sight, Hider actually escapes!
     if (CurrentDistanceBetweenDrones <= CaptureDistanceThresholdMeters)
     {
         SeekerAIState = TEXT("FOUND");
     }
-    else if (bHasDetectedHider && TimeSinceLastDetection < 6.0f)
+    else if (bHasDetectedHider && TimeSinceLastDetection < 2.2f)
     {
-        SeekerAIState = (CurrentDistanceBetweenDrones < 20.0f) ? TEXT("APPROACHING") : TEXT("DETECTED");
+        SeekerAIState = (CurrentDistanceBetweenDrones < 18.0f) ? TEXT("APPROACHING") : TEXT("DETECTED");
     }
-    else if (bHasDetectedHider && TimeSinceLastDetection < 10.0f)
+    else if (bHasDetectedHider && TimeSinceLastDetection < 5.0f)
     {
         SeekerAIState = TEXT("LOST");
     }
@@ -538,10 +582,9 @@ void AHideAndSeekGameMode::UpdateAutonomousAI(float DeltaTime)
 
     if (SeekerAIState == TEXT("APPROACHING"))
     {
-        // Slightly faster than Hider (560 vs 525 cm/s) so chases are tense and last longer!
-        SeekerSpeedCm = 560.0f;
+        SeekerSpeedCm = 555.0f;
         const FVector HiderVel = HiderDrone->GetVelocityMetersPerSec() * 100.0f;
-        GoalPos = LastKnownHiderPos + HiderVel * 0.45f;
+        GoalPos = LastKnownHiderPos + HiderVel * 0.35f;
     }
     else if (SeekerAIState == TEXT("DETECTED"))
     {

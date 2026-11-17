@@ -84,6 +84,7 @@ private:
     void FindDrones();
     void FindHidingCovers();
     FVector PickBestHidingSpot() const;
+    FVector PickBuildingOrbitSpot() const;
     void CheckCaptureCondition();
     void UpdateAutonomousAI(float DeltaTime);
     void UpdateCinematicPOV(float DeltaTime);
