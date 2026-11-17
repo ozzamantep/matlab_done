@@ -82,10 +82,6 @@ AUnderwaterDrone::AUnderwaterDrone()
     FollowCamera->bUsePawnControlRotation = false;
     FollowCamera->SetFieldOfView(92.0f);
 
-    FollowCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("FollowCamera"));
-    FollowCamera->SetupAttachment(CameraBoom, USpringArmComponent::SocketName);
-    FollowCamera->bUsePawnControlRotation = false;
-
     // ── Thrusters (BlueROV2 Heavy vectored layout) ──
     SetupThrusters();
 }
