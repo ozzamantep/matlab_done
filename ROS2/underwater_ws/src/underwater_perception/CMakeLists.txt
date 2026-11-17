@@ -10,6 +10,7 @@ find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(nav_msgs REQUIRED)
 find_package(underwater_interfaces REQUIRED)
 
 add_executable(sonar_target_tracker src/sonar_target_tracker.cpp)
@@ -18,6 +19,7 @@ ament_target_dependencies(sonar_target_tracker
   std_msgs
   sensor_msgs
   geometry_msgs
+  nav_msgs
   underwater_interfaces
 )
 
