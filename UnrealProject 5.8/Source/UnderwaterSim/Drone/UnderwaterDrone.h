@@ -87,6 +87,24 @@ public:
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Drone|Propellers")
     USceneComponent* PropellerHubRight;
 
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Drone|Propellers")
+    USceneComponent* PropellerHubFrontLeft;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Drone|Propellers")
+    USceneComponent* PropellerHubFrontRight;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Drone|Propellers")
+    USceneComponent* PropellerHubVertLeft;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Drone|Propellers")
+    USceneComponent* PropellerHubVertRight;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Drone|Grabber")
+    USceneComponent* ClawPivotLeft;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Drone|Grabber")
+    USceneComponent* ClawPivotRight;
+
     // ── Game Properties ──
 
     /** Role of this drone in the hide-and-seek game */
@@ -108,6 +126,10 @@ public:
     /** Update camera boom arm length and FOV dynamically for cinematic chase feel */
     UFUNCTION(BlueprintCallable, Category = "Drone|Camera")
     void UpdateCinematicCamera(float TargetArmLength, float TargetFOV, float DeltaTime);
+
+    /** Animate front robotic grabber claw (0.0 = closed/clamped, 1.0 = wide open) */
+    UFUNCTION(BlueprintCallable, Category = "Drone|Grabber")
+    void SetGrabberState(float TargetOpenAmount, float DeltaTime);
 
     // ── Movement API ──
 
@@ -183,6 +205,7 @@ private:
     TArray<FBubbleParticle> BubblePool;
     int32 NextBubbleIdx = 0;
     float BubbleSpawnTimer = 0.0f;
+    float CurrentClawOpen = 0.25f;
 
     void InitPropellersAndBubbles();
     void UpdatePropellersAndBubbles(float DeltaTime);

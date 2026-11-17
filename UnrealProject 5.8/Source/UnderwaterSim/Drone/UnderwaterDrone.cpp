@@ -433,7 +433,7 @@ void AUnderwaterDrone::InitPropellersAndBubbles()
     static ConstructorHelpers::FObjectFinder<UStaticMesh> CubeFinder(TEXT("/Engine/BasicShapes/Cube.Cube"));
     static ConstructorHelpers::FObjectFinder<UStaticMesh> SphereFinder(TEXT("/Engine/BasicShapes/Sphere.Sphere"));
 
-    auto CreatePropHub = [&](const TCHAR* HubName, const FVector& LocalPos) -> USceneComponent*
+    auto CreatePropHub = [&](const TCHAR* HubName, const FVector& LocalPos, bool bVertical) -> USceneComponent*
     {
         USceneComponent* Hub = CreateDefaultSubobject<USceneComponent>(HubName);
         Hub->SetupAttachment(DroneBody);
@@ -449,15 +449,62 @@ void AUnderwaterDrone::InitPropellersAndBubbles()
                 Blade->SetStaticMesh(CubeFinder.Object);
                 Blade->SetCollisionEnabled(ECollisionEnabled::NoCollision);
                 Blade->SetCastShadow(false);
-                Blade->SetRelativeScale3D(b == 0 ? FVector(0.03f, 0.28f, 0.06f) : FVector(0.03f, 0.06f, 0.28f));
-                Blade->SetRelativeRotation(FRotator(0.0f, 0.0f, b == 0 ? 15.0f : -15.0f));
+                if (bVertical)
+                {
+                    Blade->SetRelativeScale3D(b == 0 ? FVector(0.28f, 0.06f, 0.03f) : FVector(0.06f, 0.28f, 0.03f));
+                    Blade->SetRelativeRotation(FRotator(b == 0 ? 15.0f : -15.0f, 0.0f, 0.0f));
+                }
+                else
+                {
+                    Blade->SetRelativeScale3D(b == 0 ? FVector(0.03f, 0.28f, 0.06f) : FVector(0.03f, 0.06f, 0.28f));
+                    Blade->SetRelativeRotation(FRotator(0.0f, 0.0f, b == 0 ? 15.0f : -15.0f));
+                }
             }
         }
         return Hub;
     };
 
-    PropellerHubLeft  = CreatePropHub(TEXT("PropellerHubLeft"),  FVector(-82.0f, -34.0f, -6.0f));
-    PropellerHubRight = CreatePropHub(TEXT("PropellerHubRight"), FVector(-82.0f,  34.0f, -6.0f));
+    // All 6 ROV propellers (2 Rear, 2 Front, 2 Vertical)
+    PropellerHubLeft       = CreatePropHub(TEXT("PropellerHubLeft"),       FVector(-82.0f, -34.0f, -6.0f), false);
+    PropellerHubRight      = CreatePropHub(TEXT("PropellerHubRight"),      FVector(-82.0f,  34.0f, -6.0f), false);
+    PropellerHubFrontLeft  = CreatePropHub(TEXT("PropellerHubFrontLeft"),  FVector( 45.0f, -34.0f, -6.0f), false);
+    PropellerHubFrontRight = CreatePropHub(TEXT("PropellerHubFrontRight"), FVector( 45.0f,  34.0f, -6.0f), false);
+    PropellerHubVertLeft   = CreatePropHub(TEXT("PropellerHubVertLeft"),   FVector(-10.0f, -26.0f, 22.0f), true);
+    PropellerHubVertRight  = CreatePropHub(TEXT("PropellerHubVertRight"),  FVector(-10.0f,  26.0f, 22.0f), true);
+
+    // Front Robotic Grabber Claws (Left & Right jaws that open & snap shut on capture)
+    auto CreateClawArm = [&](const TCHAR* PivotName, const FVector& LocalPos, float SideSign) -> USceneComponent*
+    {
+        USceneComponent* Pivot = CreateDefaultSubobject<USceneComponent>(PivotName);
+        Pivot->SetupAttachment(DroneBody);
+        Pivot->SetRelativeLocation(LocalPos);
+
+        if (CubeFinder.Succeeded())
+        {
+            UStaticMeshComponent* Arm = CreateDefaultSubobject<UStaticMeshComponent>(
+                *FString::Printf(TEXT("%s_Arm"), PivotName));
+            Arm->SetupAttachment(Pivot);
+            Arm->SetStaticMesh(CubeFinder.Object);
+            Arm->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+            Arm->SetCastShadow(false);
+            Arm->SetRelativeLocation(FVector(24.0f, 0.0f, 0.0f));
+            Arm->SetRelativeScale3D(FVector(0.48f, 0.07f, 0.09f));
+
+            UStaticMeshComponent* Tip = CreateDefaultSubobject<UStaticMeshComponent>(
+                *FString::Printf(TEXT("%s_Tip"), PivotName));
+            Tip->SetupAttachment(Pivot);
+            Tip->SetStaticMesh(CubeFinder.Object);
+            Tip->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+            Tip->SetCastShadow(false);
+            Tip->SetRelativeLocation(FVector(50.0f, -SideSign * 8.0f, 0.0f));
+            Tip->SetRelativeRotation(FRotator(0.0f, -SideSign * 35.0f, 0.0f));
+            Tip->SetRelativeScale3D(FVector(0.22f, 0.06f, 0.08f));
+        }
+        return Pivot;
+    };
+
+    ClawPivotLeft  = CreateClawArm(TEXT("ClawPivotLeft"),  FVector(82.0f, -16.0f, -18.0f), -1.0f);
+    ClawPivotRight = CreateClawArm(TEXT("ClawPivotRight"), FVector(82.0f,  16.0f, -18.0f),  1.0f);
 
     // Pooled bubble spheres for directional underwater thruster wake
     BubblePool.SetNum(24);
@@ -488,11 +535,17 @@ void AUnderwaterDrone::UpdatePropellersAndBubbles(float DeltaTime)
     const float Speed = Vel.Size();
     const float ForwardSpeed = FVector::DotProduct(Vel, GetActorForwardVector());
 
-    // Spin both rear propellers proportionally to thrust/speed (reverses if braking/reversing)
+    // Spin ALL 6 propellers proportionally to thrust/speed
     const float SpinSign = (ForwardSpeed >= -10.0f) ? 1.0f : -1.0f;
     const float SpinRateDeg = SpinSign * (240.0f + Speed * 3.8f);
-    if (PropellerHubLeft)  PropellerHubLeft->AddLocalRotation(FRotator(0.0f, 0.0f, SpinRateDeg * DeltaTime));
-    if (PropellerHubRight) PropellerHubRight->AddLocalRotation(FRotator(0.0f, 0.0f, -SpinRateDeg * DeltaTime));
+    if (PropellerHubLeft)       PropellerHubLeft->AddLocalRotation(FRotator(0.0f, 0.0f, SpinRateDeg * DeltaTime));
+    if (PropellerHubRight)      PropellerHubRight->AddLocalRotation(FRotator(0.0f, 0.0f, -SpinRateDeg * DeltaTime));
+    if (PropellerHubFrontLeft)  PropellerHubFrontLeft->AddLocalRotation(FRotator(0.0f, 0.0f, -SpinRateDeg * DeltaTime));
+    if (PropellerHubFrontRight) PropellerHubFrontRight->AddLocalRotation(FRotator(0.0f, 0.0f, SpinRateDeg * DeltaTime));
+
+    const float VertSpinDeg = (220.0f + FMath::Abs(Vel.Z) * 4.5f) * (Vel.Z >= 0.0f ? 1.0f : -1.0f);
+    if (PropellerHubVertLeft)   PropellerHubVertLeft->AddLocalRotation(FRotator(0.0f, VertSpinDeg * DeltaTime, 0.0f));
+    if (PropellerHubVertRight)  PropellerHubVertRight->AddLocalRotation(FRotator(0.0f, -VertSpinDeg * DeltaTime, 0.0f));
 
     // Emit bubbles behind propellers opposite to drone velocity / thrust direction
     const float SpawnInterval = FMath::Clamp(0.11f - (Speed / 700.0f) * 0.085f, 0.025f, 0.11f);
@@ -548,6 +601,14 @@ void AUnderwaterDrone::UpdatePropellersAndBubbles(float DeltaTime)
         B.Mesh->SetWorldLocation(B.WorldPos);
         B.Mesh->SetWorldScale3D(FVector(B.BaseScale * Alpha));
     }
+}
+
+void AUnderwaterDrone::SetGrabberState(float TargetOpenAmount, float DeltaTime)
+{
+    CurrentClawOpen = FMath::FInterpTo(CurrentClawOpen, FMath::Clamp(TargetOpenAmount, 0.0f, 1.0f), DeltaTime, 8.0f);
+    const float AngleDeg = FMath::Lerp(-12.0f, 42.0f, CurrentClawOpen);
+    if (ClawPivotLeft)  ClawPivotLeft->SetRelativeRotation(FRotator(0.0f, -AngleDeg, 0.0f));
+    if (ClawPivotRight) ClawPivotRight->SetRelativeRotation(FRotator(0.0f, AngleDeg, 0.0f));
 }
 
 void AUnderwaterDrone::StopAllThrusters()
