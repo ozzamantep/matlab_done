@@ -35,7 +35,7 @@ public:
 
     /** Duration of the hiding headstart in seconds */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rules")
-    float HidingHeadstartSeconds = 10.0f;
+    float HidingHeadstartSeconds = 14.0f;
 
     /** Total round duration in seconds */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rules")

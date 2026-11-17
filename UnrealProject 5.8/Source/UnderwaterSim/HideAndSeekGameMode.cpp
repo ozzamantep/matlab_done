@@ -159,7 +159,8 @@ FVector AHideAndSeekGameMode::PickBestHidingSpot() const
     const FVector SeekerPos = SeekerDrone->GetActorLocation();
     const FVector HiderPos  = HiderDrone ? HiderDrone->GetActorLocation() : SeekerPos;
 
-    TArray<FVector> CandidateSpots;
+    TArray<FVector> OccludedSpots;
+    TArray<FVector> FallbackSpots;
     for (AActor* Cover : HidingCoverActors)
     {
         if (!Cover) continue;
@@ -167,27 +168,44 @@ FVector AHideAndSeekGameMode::PickBestHidingSpot() const
         Cover->GetActorBounds(true, Origin, Extent);
         const float Radius = FMath::Max(Extent.X, Extent.Y);
 
-        // Spot on the opposite side of the building from Seeker
+        // Spot tucked close behind the opposite side of the building from Seeker
         FVector AwayFromSeeker = (Origin - SeekerPos);
         AwayFromSeeker.Z = 0.0f;
         if (AwayFromSeeker.IsNearlyZero()) AwayFromSeeker = FVector(1.0f, 0.0f, 0.0f);
         AwayFromSeeker.Normalize();
 
-        FVector Spot = Origin + AwayFromSeeker * (Radius + 320.0f);
-        Spot.Z = FMath::Clamp(Origin.Z + 80.0f, -1400.0f, -450.0f);
+        FVector Spot = Origin + AwayFromSeeker * (Radius + 160.0f);
+        Spot.Z = FMath::Clamp(Origin.Z + 60.0f, -1350.0f, -450.0f);
 
-        // Prefer spots reasonably far from Seeker and different from current spot
         const float DistToSeeker = FVector::Dist(Spot, SeekerPos);
         const float DistToOld    = FVector::Dist(Spot, CurrentHidingSpot);
-        if (DistToSeeker > 1400.0f && DistToOld > 800.0f)
+        if (DistToSeeker > 1800.0f && DistToOld > 700.0f)
         {
-            CandidateSpots.Add(Spot);
+            FHitResult Hit;
+            FCollisionQueryParams Params;
+            if (SeekerDrone) Params.AddIgnoredActor(SeekerDrone);
+            if (HiderDrone)  Params.AddIgnoredActor(HiderDrone);
+            // Check if a building actually blocks line-of-sight to Seeker!
+            const bool bBlocked = GetWorld() && GetWorld()->LineTraceSingleByChannel(
+                Hit, Spot, SeekerPos, ECC_Visibility, Params);
+            if (bBlocked)
+            {
+                OccludedSpots.Add(Spot);
+            }
+            else
+            {
+                FallbackSpots.Add(Spot);
+            }
         }
     }
 
-    if (CandidateSpots.Num() > 0)
+    if (OccludedSpots.Num() > 0)
     {
-        return CandidateSpots[FMath::RandRange(0, CandidateSpots.Num() - 1)];
+        return OccludedSpots[FMath::RandRange(0, OccludedSpots.Num() - 1)];
+    }
+    if (FallbackSpots.Num() > 0)
+    {
+        return FallbackSpots[FMath::RandRange(0, FallbackSpots.Num() - 1)];
     }
 
     // Fallback: pick any building cover at random
@@ -332,7 +350,7 @@ FVector AHideAndSeekGameMode::ComputeObstacleAvoidance(AUnderwaterDrone* Drone, 
     if (!Drone || !GetWorld()) return DesiredDir;
 
     const FVector Start = Drone->GetActorLocation();
-    const float TraceDist = 450.0f; // 4.5 meters
+    const float TraceDist = 160.0f; // Compact 1.6m feeler so drones glide easily between buildings
     FCollisionQueryParams Params;
     Params.AddIgnoredActor(Drone);
 
@@ -340,9 +358,7 @@ FVector AHideAndSeekGameMode::ComputeObstacleAvoidance(AUnderwaterDrone* Drone, 
     const TArray<FVector> ProbeDirs = {
         DesiredDir,
         DesiredDir.RotateAngleAxis(35.0f, FVector::UpVector),
-        DesiredDir.RotateAngleAxis(-35.0f, FVector::UpVector),
-        FVector::UpVector,
-        -FVector::UpVector
+        DesiredDir.RotateAngleAxis(-35.0f, FVector::UpVector)
     };
 
     for (const FVector& Dir : ProbeDirs)
@@ -353,18 +369,18 @@ FVector AHideAndSeekGameMode::ComputeObstacleAvoidance(AUnderwaterDrone* Drone, 
             if (Cast<AUnderwaterDrone>(Hit.GetActor()) == nullptr)
             {
                 const float Strength = 1.0f - (Hit.Distance / TraceDist);
-                Repulsion += Hit.ImpactNormal * (Strength * 1.8f);
+                Repulsion += Hit.ImpactNormal * (Strength * 0.9f);
             }
         }
     }
 
     // Soft depth & arena bounds guard
-    if (Start.Z > -150.0f) Repulsion.Z -= 1.0f;
-    if (Start.Z < -2600.0f) Repulsion.Z += 1.0f;
-    if (Start.X >  5500.0f) Repulsion.X -= 1.2f;
-    if (Start.X < -5500.0f) Repulsion.X += 1.2f;
-    if (Start.Y >  5500.0f) Repulsion.Y -= 1.2f;
-    if (Start.Y < -5500.0f) Repulsion.Y += 1.2f;
+    if (Start.Z > -150.0f) Repulsion.Z -= 0.8f;
+    if (Start.Z < -2600.0f) Repulsion.Z += 0.8f;
+    if (Start.X >  5800.0f) Repulsion.X -= 1.0f;
+    if (Start.X < -5800.0f) Repulsion.X += 1.0f;
+    if (Start.Y >  5800.0f) Repulsion.Y -= 1.0f;
+    if (Start.Y < -5800.0f) Repulsion.Y += 1.0f;
 
     return (DesiredDir + Repulsion).GetSafeNormal();
 }
@@ -398,16 +414,16 @@ void AHideAndSeekGameMode::UpdateAutonomousAI(float DeltaTime)
         FVector HiderDir = FVector::ZeroVector;
         float HiderSpeedCm = 0.0f;
 
-        if (DistToCover > 280.0f)
+        if (DistToCover > 200.0f)
         {
             HiderDir = (CurrentHidingSpot - HiderPos).GetSafeNormal();
             HiderDir = ComputeObstacleAvoidance(HiderDrone, HiderDir);
-            HiderSpeedCm = (CurrentPhase == EGameStatePhase::HidingPhase) ? 560.0f : 470.0f;
+            HiderSpeedCm = (CurrentPhase == EGameStatePhase::HidingPhase) ? 680.0f : 500.0f;
         }
         else
         {
-            // Tucked behind building! Gently hover and face away/peek
-            HiderSpeedCm = 60.0f;
+            // Tucked behind building! Gently hover
+            HiderSpeedCm = 30.0f;
             HiderDir = (HiderPos - SeekerPos).GetSafeNormal2D();
         }
 
@@ -440,8 +456,8 @@ void AHideAndSeekGameMode::UpdateAutonomousAI(float DeltaTime)
         }
     }
 
-    // Fallback acoustic/line-of-sight detection within 45m
-    if (!bDetectedThisTick && CurrentDistanceBetweenDrones <= 45.0f && GetWorld())
+    // Line-of-sight detection only within 22m (so Seeker truly has to search around buildings!)
+    if (!bDetectedThisTick && CurrentDistanceBetweenDrones <= 22.0f && GetWorld())
     {
         FHitResult Hit;
         FCollisionQueryParams Params;
