@@ -160,6 +160,7 @@ private:
     float PendingYaw = 0.0f;
 
     FVector AutonomousWorldVelocity = FVector::ZeroVector;
+    FVector SmoothedVelocity = FVector::ZeroVector;
     float AutonomousTargetYawDeg = 0.0f;
     bool bHasAutonomousCmd = false;
 };

@@ -291,61 +291,59 @@ void AUnderwaterDrone::Tick(float DeltaTime)
         }
         else
         {
-            // Autonomous AI drives this drone while player observes via cinematic chase camera
+            // Smooth real-submarine steering: gradual yaw turn + forward propulsion (no instant snapping/glitching)
             const FRotator CurrentRot = GetActorRotation();
             const FRotator TargetRot(0.0f, AutonomousTargetYawDeg, 0.0f);
-            const FRotator NewRot = FMath::RInterpTo(CurrentRot, TargetRot, DeltaTime, 4.5f);
+            const FRotator NewRot = FMath::RInterpConstantTo(CurrentRot, TargetRot, DeltaTime, 110.0f);
             SetActorRotation(NewRot);
 
-            // Subtle banking/pitching on VisualMesh for fluid underwater motion feel
             if (VisualMesh)
             {
                 const float YawDelta = FMath::FindDeltaAngleDegrees(CurrentRot.Yaw, AutonomousTargetYawDeg);
-                const float BankRoll = FMath::Clamp(YawDelta * 0.35f, -18.0f, 18.0f);
-                const float SpeedPitch = FMath::Clamp(-AutonomousWorldVelocity.Z * 0.03f, -15.0f, 15.0f);
+                const float BankRoll = FMath::Clamp(YawDelta * 0.22f, -12.0f, 12.0f);
+                const float SpeedPitch = FMath::Clamp(-SmoothedVelocity.Z * 0.025f, -12.0f, 12.0f);
                 const FRotator TargetVisualRot(BankRoll, -90.0f, SpeedPitch);
-                VisualMesh->SetRelativeRotation(FMath::RInterpTo(VisualMesh->GetRelativeRotation(), TargetVisualRot, DeltaTime, 6.0f));
+                VisualMesh->SetRelativeRotation(FMath::RInterpTo(VisualMesh->GetRelativeRotation(), TargetVisualRot, DeltaTime, 4.0f));
             }
 
+            SmoothedVelocity = FMath::VInterpTo(SmoothedVelocity, AutonomousWorldVelocity, DeltaTime, 2.8f);
             if (DroneBody && DroneBody->IsSimulatingPhysics())
             {
-                const FVector CurrentVel = DroneBody->GetPhysicsLinearVelocity();
-                const FVector NewVel = FMath::VInterpTo(CurrentVel, AutonomousWorldVelocity, DeltaTime, 6.5f);
-                DroneBody->SetPhysicsLinearVelocity(NewVel);
+                DroneBody->SetPhysicsLinearVelocity(SmoothedVelocity);
                 DroneBody->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
             }
             else
             {
-                AddActorWorldOffset(AutonomousWorldVelocity * DeltaTime, true);
+                AddActorWorldOffset(SmoothedVelocity * DeltaTime, true);
             }
         }
     }
     else if (bAutonomousAI && bHasAutonomousCmd)
     {
-        // Non-possessed drone (e.g. Hider) driven autonomously
+        // Non-possessed drone (e.g. Hider) driven with smooth real-submarine steering
         const FRotator CurrentRot = GetActorRotation();
         const FRotator TargetRot(0.0f, AutonomousTargetYawDeg, 0.0f);
-        SetActorRotation(FMath::RInterpTo(CurrentRot, TargetRot, DeltaTime, 4.5f));
+        const FRotator NewRot = FMath::RInterpConstantTo(CurrentRot, TargetRot, DeltaTime, 110.0f);
+        SetActorRotation(NewRot);
 
         if (VisualMesh)
         {
             const float YawDelta = FMath::FindDeltaAngleDegrees(CurrentRot.Yaw, AutonomousTargetYawDeg);
-            const float BankRoll = FMath::Clamp(YawDelta * 0.35f, -18.0f, 18.0f);
-            const float SpeedPitch = FMath::Clamp(-AutonomousWorldVelocity.Z * 0.03f, -15.0f, 15.0f);
+            const float BankRoll = FMath::Clamp(YawDelta * 0.22f, -12.0f, 12.0f);
+            const float SpeedPitch = FMath::Clamp(-SmoothedVelocity.Z * 0.025f, -12.0f, 12.0f);
             const FRotator TargetVisualRot(BankRoll, -90.0f, SpeedPitch);
-            VisualMesh->SetRelativeRotation(FMath::RInterpTo(VisualMesh->GetRelativeRotation(), TargetVisualRot, DeltaTime, 6.0f));
+            VisualMesh->SetRelativeRotation(FMath::RInterpTo(VisualMesh->GetRelativeRotation(), TargetVisualRot, DeltaTime, 4.0f));
         }
 
+        SmoothedVelocity = FMath::VInterpTo(SmoothedVelocity, AutonomousWorldVelocity, DeltaTime, 2.8f);
         if (DroneBody && DroneBody->IsSimulatingPhysics())
         {
-            const FVector CurrentVel = DroneBody->GetPhysicsLinearVelocity();
-            const FVector NewVel = FMath::VInterpTo(CurrentVel, AutonomousWorldVelocity, DeltaTime, 6.5f);
-            DroneBody->SetPhysicsLinearVelocity(NewVel);
+            DroneBody->SetPhysicsLinearVelocity(SmoothedVelocity);
             DroneBody->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
         }
         else
         {
-            AddActorWorldOffset(AutonomousWorldVelocity * DeltaTime, true);
+            AddActorWorldOffset(SmoothedVelocity * DeltaTime, true);
         }
     }
 

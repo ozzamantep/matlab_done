@@ -345,51 +345,50 @@ void AHideAndSeekGameMode::UpdateCinematicPOV(float DeltaTime)
     ActiveDrone->UpdateCinematicCamera(TargetArm, TargetFOV, DeltaTime);
 }
 
-FVector AHideAndSeekGameMode::ComputeObstacleAvoidance(AUnderwaterDrone* Drone, const FVector& DesiredDir) const
+FVector AHideAndSeekGameMode::ComputeObstacleAvoidance(AUnderwaterDrone* Drone, const FVector& DesiredDir, float& TurnSign, float& TurnLockTimer, float DeltaTime) const
 {
     if (!Drone || !GetWorld()) return DesiredDir;
 
+    TurnLockTimer = FMath::Max(0.0f, TurnLockTimer - DeltaTime);
+
     const FVector Start = Drone->GetActorLocation();
-    const float TraceDist = 140.0f; // Tight 1.4m feeler: only steers right before touching wall
+    const float SweepDist = 320.0f; // Look ahead 3.2m with a sphere sweep so we steer EARLY and smoothly
     FCollisionQueryParams Params;
     Params.AddIgnoredActor(Drone);
+    if (SeekerDrone) Params.AddIgnoredActor(SeekerDrone);
+    if (HiderDrone)  Params.AddIgnoredActor(HiderDrone);
 
-    FVector Repulsion = FVector::ZeroVector;
-    const TArray<FVector> ProbeDirs = {
-        DesiredDir,
-        DesiredDir.RotateAngleAxis(35.0f, FVector::UpVector),
-        DesiredDir.RotateAngleAxis(-35.0f, FVector::UpVector)
-    };
+    FHitResult Hit;
+    const FCollisionShape Sphere = FCollisionShape::MakeSphere(85.0f);
+    const FVector End = Start + DesiredDir.GetSafeNormal() * SweepDist;
 
-    for (const FVector& Dir : ProbeDirs)
+    if (GetWorld()->SweepSingleByChannel(Hit, Start, End, FQuat::Identity, ECC_Visibility, Sphere, Params))
     {
-        FHitResult Hit;
-        if (GetWorld()->LineTraceSingleByChannel(Hit, Start, Start + Dir.GetSafeNormal() * TraceDist, ECC_Visibility, Params))
+        // Lock turn direction for 1.5s so the drone NEVER oscillates left-right-left-right!
+        if (TurnLockTimer <= 0.0f)
         {
-            if (Cast<AUnderwaterDrone>(Hit.GetActor()) == nullptr)
-            {
-                const float Strength = 1.0f - (Hit.Distance / TraceDist);
-                const FVector Normal = Hit.ImpactNormal;
-                // Tangential slide around the building so the drone NEVER cancels out and gets stuck head-on!
-                FVector Tangent = FVector::CrossProduct(Normal, FVector::UpVector).GetSafeNormal();
-                if (FVector::DotProduct(Tangent, DesiredDir) < 0.0f)
-                {
-                    Tangent = -Tangent;
-                }
-                Repulsion += (Normal * 0.6f + Tangent * 1.4f) * Strength;
-            }
+            const FVector Right = FVector::CrossProduct(FVector::UpVector, DesiredDir).GetSafeNormal();
+            TurnSign = (FVector::DotProduct(Hit.ImpactNormal, Right) >= 0.0f) ? 1.0f : -1.0f;
+            TurnLockTimer = 1.5f;
         }
+
+        const float Urgency = FMath::Clamp(1.0f - (Hit.Distance / SweepDist), 0.15f, 1.0f);
+        const FVector SideDir = FVector::CrossProduct(FVector::UpVector, DesiredDir).GetSafeNormal() * TurnSign;
+        // Steer smoothly sideways + slightly upward to glide over low arches/rocks
+        FVector Steer = DesiredDir * (1.0f - 0.5f * Urgency) + SideDir * (1.35f * Urgency) + FVector(0.0f, 0.0f, 0.55f * Urgency);
+        return Steer.GetSafeNormal();
     }
 
     // Soft depth & arena bounds guard
-    if (Start.Z > -150.0f) Repulsion.Z -= 0.8f;
-    if (Start.Z < -2600.0f) Repulsion.Z += 0.8f;
-    if (Start.X >  5800.0f) Repulsion.X -= 1.0f;
-    if (Start.X < -5800.0f) Repulsion.X += 1.0f;
-    if (Start.Y >  5800.0f) Repulsion.Y -= 1.0f;
-    if (Start.Y < -5800.0f) Repulsion.Y += 1.0f;
+    FVector Guard = DesiredDir;
+    if (Start.Z > -180.0f) Guard.Z -= 0.5f;
+    if (Start.Z < -2400.0f) Guard.Z += 0.5f;
+    if (Start.X >  5800.0f) Guard.X -= 0.8f;
+    if (Start.X < -5800.0f) Guard.X += 0.8f;
+    if (Start.Y >  5800.0f) Guard.Y -= 0.8f;
+    if (Start.Y < -5800.0f) Guard.Y += 0.8f;
 
-    return (DesiredDir + Repulsion).GetSafeNormal();
+    return Guard.GetSafeNormal();
 }
 
 void AHideAndSeekGameMode::UpdateAutonomousAI(float DeltaTime)
@@ -424,8 +423,8 @@ void AHideAndSeekGameMode::UpdateAutonomousAI(float DeltaTime)
         if (DistToCover > 200.0f)
         {
             HiderDir = (CurrentHidingSpot - HiderPos).GetSafeNormal();
-            HiderDir = ComputeObstacleAvoidance(HiderDrone, HiderDir);
-            HiderSpeedCm = (CurrentPhase == EGameStatePhase::HidingPhase) ? 680.0f : 500.0f;
+            HiderDir = ComputeObstacleAvoidance(HiderDrone, HiderDir, HiderTurnSign, HiderTurnLockTimer, DeltaTime);
+            HiderSpeedCm = (CurrentPhase == EGameStatePhase::HidingPhase) ? 620.0f : 480.0f;
         }
         else
         {
@@ -542,7 +541,7 @@ void AHideAndSeekGameMode::UpdateAutonomousAI(float DeltaTime)
     }
 
     FVector SeekerDir = (GoalPos - SeekerPos).GetSafeNormal();
-    SeekerDir = ComputeObstacleAvoidance(SeekerDrone, SeekerDir);
+    SeekerDir = ComputeObstacleAvoidance(SeekerDrone, SeekerDir, SeekerTurnSign, SeekerTurnLockTimer, DeltaTime);
     const float SeekerYaw = SeekerDir.Rotation().Yaw;
     SeekerDrone->SetAutonomousVelocity(SeekerDir * SeekerSpeedCm, SeekerYaw);
 }
