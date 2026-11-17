@@ -103,7 +103,7 @@ private:
     std_msgs::msg::String state_msg;
 
     if (!ekf_initialized_) {
-      state_msg.data = "SEARCH";
+      state_msg.data = "SEARCHING";
       state_pub_->publish(state_msg);
       return;
     }
@@ -120,12 +120,16 @@ private:
     const double dz = est_pos_[2] - seeker_pos_[2];
     const double dist = std::sqrt(dx * dx + dy * dy + dz * dz);
 
-    if (age > 6.0) {
-      state_msg.data = "SEARCH";
-    } else if (dist < 16.0) {
-      state_msg.data = "INTERCEPT";
+    if (dist <= 3.0 && age < 2.0) {
+      state_msg.data = "FOUND";
+    } else if (age > 10.0) {
+      state_msg.data = "SEARCHING";
+    } else if (age > 6.0) {
+      state_msg.data = "LOST";
+    } else if (dist < 18.0) {
+      state_msg.data = "APPROACHING";
     } else {
-      state_msg.data = "TRACK";
+      state_msg.data = "DETECTED";
     }
     state_pub_->publish(state_msg);
 

@@ -1,54 +1,50 @@
 function results = run_hide_and_seek(headless, seed)
 % RUN_HIDE_AND_SEEK Main 3D Underwater Drone Hide-and-Seek Simulation (MATLAB).
-%   Usage:
-%     results = run_hide_and_seek()          % Interactive 3D visualization
-%     results = run_hide_and_seek(true, 42)  % Fast headless simulation with seed
+%   Integrates 6-DOF Fossen physics, Sonar + Optical Camera fusion, 3D EKF,
+%   CoverageGrid, 3D A* Path Planning, APF obstacle avoidance, and full State Machine.
 
     if nargin < 1, headless = false; end
     if nargin < 2, seed = 42; end
     rng(seed);
 
-    % Add MATLAB folder to path
     rootDir = fileparts(mfilename('fullpath'));
     addpath(rootDir);
 
-    % Simulation parameters
-    dt = 0.05;                    % 20 Hz physics & control loop
-    maxTime = 120.0;              % 120s max round duration
-    headstartTime = 8.0;          % 8s HidingPhase headstart
+    dt = 0.05;
+    maxTime = 120.0;
+    headstartTime = 8.0;
     N = round(maxTime / dt);
 
-    params  = auv.BlueROV2Params();
-    arena   = sim.UnderwaterArena();
-    sonar   = sensors.SonarModel();
-    imu_s   = sensors.DepthIMUDVL();
-    tracker = perception.EKFTargetTracker();
-    pid_s   = navigation.PIDController6DOF();
-    pid_h   = navigation.PIDController6DOF();
-    seekerAI = navigation.SeekerAI();
+    params   = auv.BlueROV2Params();
+    arena    = sim.UnderwaterArena();
+    sonar    = sensors.SonarModel();
+    cam      = sensors.CameraDetector();
+    imu_s    = sensors.DepthIMUDVL();
+    tracker  = perception.EKFTargetTracker();
+    covGrid  = perception.CoverageGrid();
+    pid_s    = navigation.PIDController6DOF();
+    pid_h    = navigation.PIDController6DOF();
+    seekerAI = navigation.SeekerAI(arena);
     hiderAI  = navigation.HiderAI();
 
-    % Initial states: [x; y; z; phi; theta; psi] and [u; v; w; p; q; r]
     seeker_eta = [30; 30; -10; 0; 0; -2.35];
     seeker_nu  = zeros(6, 1);
-
     hider_eta  = [-12 + 8*randn(); -10 + 8*randn(); -14; 0; 0; 0.5];
     hider_nu   = zeros(6, 1);
 
-    % Logs
-    t_log      = zeros(1, N);
-    seeker_pos = zeros(3, N);
-    hider_pos  = zeros(3, N);
-    ekf_pos    = nan(3, N);
-    dist_log   = zeros(1, N);
-    state_log  = strings(1, N);
-    effort_s   = zeros(1, N);
+    t_log       = zeros(1, N);
+    seeker_pos  = zeros(3, N);
+    hider_pos   = zeros(3, N);
+    ekf_pos     = nan(3, N);
+    dist_log    = zeros(1, N);
+    state_log   = strings(1, N);
+    effort_s    = zeros(1, N);
+    false_dets  = 0;
 
     winner = "HIDER";
     capture_time = NaN;
     steps_run = 0;
 
-    % Setup 3D figure if interactive
     if ~headless
         fig = figure('Name', 'Underwater Drone Hide and Seek - MathWorks Challenge', ...
                      'Color', [0.03, 0.10, 0.18], 'Position', [80, 60, 1200, 720]);
@@ -59,12 +55,10 @@ function results = run_hide_and_seek(headless, seed)
         axis(ax, [arena.Bounds(1:4), arena.Bounds(5)-2, 1]);
         xlabel(ax, 'East X (m)'); ylabel(ax, 'North Y (m)'); zlabel(ax, 'Depth Z (m)');
 
-        % Draw seabed mesh
         [GX, GY] = meshgrid(-60:5:60, -60:5:60);
         GZ = arena.getSeabedHeight(GX, GY);
         surf(ax, GX, GY, GZ, 'FaceColor', [0.16, 0.22, 0.25], 'EdgeColor', 'none', 'FaceAlpha', 0.85);
 
-        % Draw obstacles
         for i = 1:numel(arena.Obstacles)
             o = arena.Obstacles(i);
             if strcmp(o.type, 'cylinder')
@@ -87,33 +81,38 @@ function results = run_hide_and_seek(headless, seed)
         hTrailH = plot3(ax, hider_eta(1), hider_eta(2), hider_eta(3), '-', 'Color', [0.15, 0.65, 1.0], 'LineWidth', 1.5);
         legend(ax, [hSeeker, hHider, hEKF], {'Seeker AUV (Yellow)', 'Hider AUV (Blue)', 'EKF Estimate'}, ...
                'TextColor', 'w', 'Color', [0.05, 0.15, 0.25], 'Location', 'northeast');
-        hTitle = title(ax, 'Initializing...', 'Color', 'w', 'FontSize', 12);
+        hTitle = title(ax, 'Initializing...', 'Color', 'w', 'FontSize', 11);
     end
 
-    % Main simulation loop
     for k = 1:N
         t = (k - 1) * dt;
         steps_run = k;
         t_log(k) = t;
 
-        if t < headstartTime
-            phase = "HIDING";
-        else
-            phase = "SEEKING";
-        end
+        if t < headstartTime, phase = "HIDING"; else, phase = "SEEKING"; end
 
-        % 1. Sensors
+        % 1. Sensors (Sonar + Optical Camera + Depth/IMU/DVL)
         scan = sonar.sense(seeker_eta, hider_eta, arena);
+        cam_det = cam.detect(seeker_eta, hider_eta, arena);
         imu_meas = imu_s.read(seeker_eta, seeker_nu); %#ok<NASGU>
 
-        % 2. Perception (EKF Target Tracker)
+        if cam_det.detected && cam_det.is_false_positive
+            false_dets = false_dets + 1;
+        end
+
+        % 2. Perception (Coverage Grid + Multi-Sensor EKF Fusion)
+        covGrid = covGrid.markVisited(seeker_eta(1:3), 18.0);
         tracker = tracker.predict(dt);
         if scan.target_detected
             tracker = tracker.update(scan.target_meas_world);
         end
+        if cam_det.detected && ~cam_det.is_false_positive
+            tracker = tracker.update(cam_det.world_pos);
+        end
 
         % 3. Guidance & Control
-        [v_des_s, yaw_des_s, seekerAI] = seekerAI.step(seeker_eta, tracker, scan, phase);
+        dist_true = norm(seeker_eta(1:3) - hider_eta(1:3));
+        [v_des_s, yaw_des_s, seekerAI] = seekerAI.step(seeker_eta, tracker, scan, covGrid, phase, dist_true);
         [tau_s, pid_s] = pid_s.computeControl(seeker_eta, seeker_nu, v_des_s, yaw_des_s, dt);
 
         [v_des_h, yaw_des_h, hiderAI] = hiderAI.step(hider_eta, seeker_eta, arena, phase, t);
@@ -133,14 +132,11 @@ function results = run_hide_and_seek(headless, seed)
         dist = norm(seeker_eta(1:3) - hider_eta(1:3));
         seeker_pos(:, k) = seeker_eta(1:3);
         hider_pos(:, k)  = hider_eta(1:3);
-        if tracker.Initialized
-            ekf_pos(:, k) = tracker.x(1:3);
-        end
+        if tracker.Initialized, ekf_pos(:, k) = tracker.x(1:3); end
         dist_log(k)  = dist;
         state_log(k) = seekerAI.State;
         effort_s(k)  = norm(tau_s(1:3));
 
-        % Update 3D plot every 4 frames
         if ~headless && mod(k, 4) == 0 && isvalid(fig)
             set(hSeeker, 'XData', seeker_eta(1), 'YData', seeker_eta(2), 'ZData', seeker_eta(3));
             set(hHider,  'XData', hider_eta(1),  'YData', hider_eta(2),  'ZData', hider_eta(3));
@@ -149,8 +145,8 @@ function results = run_hide_and_seek(headless, seed)
             if tracker.Initialized
                 set(hEKF, 'XData', tracker.x(1), 'YData', tracker.x(2), 'ZData', tracker.x(3));
             end
-            set(hTitle, 'String', sprintf('Phase: %s | AI: %s | t=%.1fs | Dist=%.2fm | EKF Conf=%.0f%%', ...
-                phase, seekerAI.State, t, dist, tracker.Confidence*100));
+            set(hTitle, 'String', sprintf('Phase: %s | State: %s | t=%.1fs | Dist=%.2fm | Cov=%.0f%% | EKF Conf=%.0f%%', ...
+                phase, seekerAI.State, t, dist, covGrid.getCoveragePercent(), tracker.Confidence*100));
             drawnow limitrate;
         end
 
@@ -161,7 +157,6 @@ function results = run_hide_and_seek(headless, seed)
         end
     end
 
-    % Trim logs
     t_log      = t_log(1:steps_run);
     seeker_pos = seeker_pos(:, 1:steps_run);
     hider_pos  = hider_pos(:, 1:steps_run);
@@ -172,24 +167,25 @@ function results = run_hide_and_seek(headless, seed)
 
     valid_ekf = ~isnan(ekf_pos(1, :));
     if any(valid_ekf)
-        ekf_err = vecnorm(ekf_pos(:, valid_ekf) - hider_pos(:, valid_ekf));
-        ekf_rmse = sqrt(mean(ekf_err.^2));
+        ekf_rmse = sqrt(mean(vecnorm(ekf_pos(:, valid_ekf) - hider_pos(:, valid_ekf)).^2));
     else
         ekf_rmse = NaN;
     end
 
-    results.winner       = winner;
-    results.capture_time = capture_time;
-    results.final_dist   = dist_log(end);
-    results.ekf_rmse     = ekf_rmse;
-    results.mean_effort  = mean(effort_s);
-    results.t            = t_log;
-    results.seeker_pos   = seeker_pos;
-    results.hider_pos    = hider_pos;
-    results.ekf_pos      = ekf_pos;
-    results.dist         = dist_log;
-    results.states       = state_log;
+    results.winner           = winner;
+    results.capture_time     = capture_time;
+    results.final_dist       = dist_log(end);
+    results.ekf_rmse         = ekf_rmse;
+    results.mean_effort      = mean(effort_s);
+    results.coverage_pct     = covGrid.getCoveragePercent();
+    results.false_detections = false_dets;
+    results.t                = t_log;
+    results.seeker_pos       = seeker_pos;
+    results.hider_pos        = hider_pos;
+    results.ekf_pos          = ekf_pos;
+    results.dist             = dist_log;
+    results.states           = state_log;
 
-    fprintf('[Sim Seed %d] Winner: %s | Time: %.2fs | Final Dist: %.2fm | EKF RMSE: %.2fm\n', ...
-        seed, winner, t_log(end), dist_log(end), ekf_rmse);
+    fprintf('[Sim Seed %d] Winner: %s | Time: %.2fs | Dist: %.2fm | EKF RMSE: %.2fm | Cov: %.1f%% | FalseDet: %d\n', ...
+        seed, winner, t_log(end), dist_log(end), ekf_rmse, results.coverage_pct, false_dets);
 end

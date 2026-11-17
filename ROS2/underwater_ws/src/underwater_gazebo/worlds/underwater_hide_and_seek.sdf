@@ -1,0 +1,114 @@
+<?xml version="1.0" ?>
+<sdf version="1.9">
+  <world name="underwater_hide_and_seek">
+    <physics name="1ms" type="ignored">
+      <max_step_size>0.01</max_step_size>
+      <real_time_factor>1.0</real_time_factor>
+    </physics>
+
+    <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands"/>
+    <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
+    <plugin filename="gz-sim-sensors-system" name="gz::sim::systems::Sensors">
+      <render_engine>ogre2</render_engine>
+    </plugin>
+    <plugin filename="gz-sim-buoyancy-system" name="gz::sim::systems::Buoyancy">
+      <uniform_fluid_density>1025</uniform_fluid_density>
+    </plugin>
+
+    <scene>
+      <ambient>0.15 0.35 0.45 1</ambient>
+      <background>0.03 0.16 0.28 1</background>
+      <fog>
+        <color>0.04 0.20 0.32 1</color>
+        <type>linear</type>
+        <start>5.0</start>
+        <end>40.0</end>
+        <density>0.04</density>
+      </fog>
+    </scene>
+
+    <light type="directional" name="sunlight">
+      <cast_shadows>true</cast_shadows>
+      <pose>0 0 30 0 0 0</pose>
+      <diffuse>0.7 0.85 0.95 1</diffuse>
+      <specular>0.2 0.2 0.2 1</specular>
+      <direction>-0.3 0.2 -0.9</direction>
+    </light>
+
+    <!-- Seabed -->
+    <model name="seabed">
+      <static>true</static>
+      <pose>0 0 -28 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><plane><normal>0 0 1</normal><size>140 140</size></plane></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><plane><normal>0 0 1</normal><size>140 140</size></plane></geometry>
+          <material>
+            <ambient>0.18 0.22 0.20 1</ambient>
+            <diffuse>0.24 0.28 0.25 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Underwater Obstacles & Hiding Areas -->
+    <model name="coral_lighthouse">
+      <static>true</static>
+      <pose>0 5 -17 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><cylinder><radius>4.5</radius><length>22.0</length></cylinder></geometry></collision>
+        <visual name="vis">
+          <geometry><cylinder><radius>4.5</radius><length>22.0</length></cylinder></geometry>
+          <material><diffuse>0.85 0.55 0.35 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="shipwreck_hull">
+      <static>true</static>
+      <pose>-22 -18 -22 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><cylinder><radius>7.0</radius><length>12.0</length></cylinder></geometry></collision>
+        <visual name="vis">
+          <geometry><cylinder><radius>7.0</radius><length>12.0</length></cylinder></geometry>
+          <material><diffuse>0.45 0.38 0.32 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="north_reef_pillar">
+      <static>true</static>
+      <pose>20 22 -20 0 0 0</pose>
+      <link name="link">
+        <collision name="col"><geometry><cylinder><radius>5.0</radius><length>16.0</length></cylinder></geometry></collision>
+        <visual name="vis">
+          <geometry><cylinder><radius>5.0</radius><length>16.0</length></cylinder></geometry>
+          <material><diffuse>0.35 0.65 0.55 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Seeker AUV (Yellow BlueROV2) -->
+    <include>
+      <uri>model://bluerov2</uri>
+      <name>seeker_auv</name>
+      <pose>30 30 -10 0 0 -2.35</pose>
+    </include>
+
+    <!-- Hider Target AUV (Blue Buoyant Box/ROV) -->
+    <model name="hider_auv">
+      <pose>-14 -12 -14 0 0 0.5</pose>
+      <link name="base_link">
+        <inertial><mass>11.5</mass><inertia><ixx>0.2</ixx><iyy>0.2</iyy><izz>0.3</izz></inertia></inertial>
+        <collision name="col"><geometry><box><size>0.55 0.45 0.35</size></box></geometry></collision>
+        <visual name="vis">
+          <geometry><box><size>0.55 0.45 0.35</size></box></geometry>
+          <material><diffuse>0.10 0.55 1.0 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+  </world>
+</sdf>

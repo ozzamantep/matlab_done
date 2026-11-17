@@ -98,9 +98,10 @@ private:
     std::array<double, 3> goal = waypoints_[wp_idx_];
     double max_speed = 1.65;
 
-    if ((mission_state_ == "TRACK" || mission_state_ == "INTERCEPT") && has_target_) {
+    if ((mission_state_ == "DETECTED" || mission_state_ == "APPROACHING" ||
+         mission_state_ == "TRACK" || mission_state_ == "INTERCEPT") && has_target_) {
       goal = target_pos_;
-      max_speed = (mission_state_ == "INTERCEPT") ? 2.05 : 1.80;
+      max_speed = (mission_state_ == "APPROACHING" || mission_state_ == "INTERCEPT") ? 2.05 : 1.80;
     } else {
       const double dx = goal[0] - pos_[0];
       const double dy = goal[1] - pos_[1];

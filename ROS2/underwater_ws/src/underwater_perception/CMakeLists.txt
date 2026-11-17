@@ -26,5 +26,10 @@ install(TARGETS
   DESTINATION lib/${PROJECT_NAME}
 )
 
+install(PROGRAMS
+  scripts/camera_target_detector.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
 ament_package()
 

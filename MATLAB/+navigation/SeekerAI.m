@@ -1,90 +1,94 @@
 classdef SeekerAI
-% SEEKERAI Autonomous Seeker Decision State Machine (SEARCH -> TRACK -> INTERCEPT).
-%   Includes 3D Lawnmower/Spiral search waypoints and Artificial Potential Field (APF)
-%   reactive obstacle avoidance.
+% SEEKERAI Autonomous Seeker State Machine (IDLE, SEARCHING, DETECTED, APPROACHING, FOUND, LOST).
+%   Integrates 3D A* global path planning, CoverageGrid search, and APF obstacle avoidance.
 
     properties
-        State string = "SEARCH"
-        Waypoints (3,:) double
-        WpIdx double = 1
+        State string = "IDLE"
+        Planner
+        CurrentPath (3,:) double = zeros(3,0)
+        PathIdx double = 1
+        ReplanCounter double = 0
         CruiseSpeed = 1.65        % m/s
-        InterceptSpeed = 2.05     % m/s
+        ApproachSpeed = 2.05      % m/s
         RepulsiveGain = 18.0
         RepulsiveRange = 6.5
     end
 
     methods
-        function obj = SeekerAI()
-            % 3D Lawnmower + Spiral patrol covering the 120x120m arena
-            pts = [
-                -35, -35, -10;
-                 35, -35, -12;
-                 35, -10, -14;
-                -35, -10, -12;
-                -35,  15, -14;
-                 35,  15, -12;
-                 35,  38, -10;
-                -35,  38, -12;
-                  0,   0, -15
-            ]';
-            obj.Waypoints = pts;
+        function obj = SeekerAI(arena)
+            if nargin >= 1
+                obj.Planner = navigation.AStarPlanner3D(arena, 6.0);
+            end
         end
 
-        function [v_des, yaw_des, obj] = step(obj, seeker_eta, tracker, scan, phase)
+        function [v_des, yaw_des, obj] = step(obj, seeker_eta, tracker, scan, covGrid, phase, dist_true)
             p_s = seeker_eta(1:3);
 
-            % During HidingPhase headstart, Seeker holds position / scans slowly
             if strcmp(phase, "HIDING")
-                obj.State = "WAIT_HEADSTART";
+                obj.State = "IDLE";
                 v_des = [0; 0; 0];
                 yaw_des = seeker_eta(6) + 0.35;
                 return;
             end
 
-            % State transitions based on EKF confidence and time since last measurement
-            if tracker.Initialized && tracker.TimeSinceLastMeas < 6.0
-                dist_est = norm(tracker.x(1:3) - p_s);
-                if dist_est < 16.0 && tracker.Confidence > 0.45
-                    obj.State = "INTERCEPT";
+            % Full Hide-and-Seek State Machine: IDLE, SEARCHING, DETECTED, APPROACHING, FOUND, LOST
+            if nargin >= 7 && dist_true <= 3.0
+                obj.State = "FOUND";
+            elseif tracker.Initialized && tracker.TimeSinceLastMeas < 1.5
+                if norm(tracker.x(1:3) - p_s) < 18.0
+                    obj.State = "APPROACHING";
                 else
-                    obj.State = "TRACK";
+                    obj.State = "DETECTED";
                 end
+            elseif tracker.Initialized && tracker.TimeSinceLastMeas < 6.0
+                obj.State = "APPROACHING";
+            elseif tracker.Initialized && tracker.TimeSinceLastMeas >= 6.0 && tracker.TimeSinceLastMeas < 11.0
+                obj.State = "LOST";
             else
-                obj.State = "SEARCH";
+                obj.State = "SEARCHING";
             end
 
-            % Desired velocity vector before obstacle avoidance
-            if obj.State == "SEARCH"
-                wp = obj.Waypoints(:, obj.WpIdx);
-                diff_wp = wp - p_s;
-                if norm(diff_wp) < 4.5
-                    obj.WpIdx = mod(obj.WpIdx, size(obj.Waypoints, 2)) + 1;
-                    wp = obj.Waypoints(:, obj.WpIdx);
-                    diff_wp = wp - p_s;
+            % Determine goal & desired velocity
+            if obj.State == "SEARCHING" || obj.State == "LOST"
+                goal = covGrid.getNearestUnvisited(p_s);
+                obj.ReplanCounter = obj.ReplanCounter + 1;
+                needReplan = isempty(obj.CurrentPath) || ...
+                             norm(obj.CurrentPath(:, end) - goal) > 8.0 || ...
+                             (obj.PathIdx >= size(obj.CurrentPath, 2) && norm(obj.CurrentPath(:, end) - p_s) < 5.0);
+                if ~isempty(obj.Planner) && needReplan
+                    obj.CurrentPath = obj.Planner.plan(p_s, goal);
+                    obj.PathIdx = min(2, size(obj.CurrentPath, 2));
                 end
-                dir = diff_wp / max(1e-4, norm(diff_wp));
+
+                if ~isempty(obj.CurrentPath)
+                    wp = obj.CurrentPath(:, obj.PathIdx);
+                    if norm(wp - p_s) < 4.5 && obj.PathIdx < size(obj.CurrentPath, 2)
+                        obj.PathIdx = obj.PathIdx + 1;
+                        wp = obj.CurrentPath(:, obj.PathIdx);
+                    end
+                    target_pt = wp;
+                else
+                    target_pt = goal;
+                end
+
+                diff_t = target_pt - p_s;
+                dir = diff_t / max(1e-4, norm(diff_t));
                 v_att = dir * obj.CruiseSpeed;
                 yaw_des = atan2(dir(2), dir(1));
 
-            elseif obj.State == "TRACK"
-                % Pursue EKF estimated position
-                target_pos = tracker.x(1:3);
-                diff_t = target_pos - p_s;
-                dir = diff_t / max(1e-4, norm(diff_t));
-                v_att = dir * (obj.CruiseSpeed * 1.1);
-                yaw_des = atan2(dir(2), dir(1));
-
-            else % INTERCEPT (Lead Pursuit)
+            else % DETECTED, APPROACHING, FOUND (Lead Pursuit)
                 target_pos = tracker.x(1:3);
                 target_vel = tracker.x(4:6);
                 dist = norm(target_pos - p_s);
-                t_lead = min(2.5, dist / obj.InterceptSpeed);
+                t_lead = min(2.5, dist / obj.ApproachSpeed);
                 intercept_pt = target_pos + 0.7 * target_vel * t_lead;
                 intercept_pt(3) = max(min(intercept_pt(3), -1.0), -26.0);
 
                 diff_i = intercept_pt - p_s;
                 dir = diff_i / max(1e-4, norm(diff_i));
-                v_att = dir * obj.InterceptSpeed;
+                spd = obj.ApproachSpeed;
+                if obj.State == "DETECTED", spd = obj.CruiseSpeed * 1.1; end
+                v_att = dir * spd;
                 yaw_des = atan2(dir(2), dir(1));
             end
 
@@ -104,9 +108,8 @@ classdef SeekerAI
 
             v_des = v_att + v_rep;
             spd = norm(v_des);
-            max_spd = obj.InterceptSpeed;
-            if spd > max_spd
-                v_des = (v_des / spd) * max_spd;
+            if spd > obj.ApproachSpeed
+                v_des = (v_des / spd) * obj.ApproachSpeed;
             end
         end
     end

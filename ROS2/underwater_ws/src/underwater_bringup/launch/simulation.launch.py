@@ -11,6 +11,12 @@ def generate_launch_description():
             output='screen',
         ),
         Node(
+            package='underwater_perception',
+            executable='camera_target_detector.py',
+            name='camera_target_detector',
+            output='screen',
+        ),
+        Node(
             package='underwater_navigation',
             executable='auv_controller',
             name='auv_controller',
