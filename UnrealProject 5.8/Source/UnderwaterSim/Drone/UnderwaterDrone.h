@@ -91,6 +91,14 @@ public:
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Game")
     int32 DroneID = 0;
 
+    /** When true, the drone moves autonomously according to Hide-and-Seek mission AI (unless player presses WASD) */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Game|AI")
+    bool bAutonomousAI = true;
+
+    /** Drive the drone autonomously with a desired world-space velocity (cm/s) and heading (deg) */
+    UFUNCTION(BlueprintCallable, Category = "Drone|Movement")
+    void SetAutonomousVelocity(const FVector& WorldVelocityCmPerSec, float TargetYawDeg);
+
     // ── Movement API ──
 
     /** Move forward/backward (-1 to 1) */
@@ -146,4 +154,8 @@ private:
     float PendingSway = 0.0f;
     float PendingHeave = 0.0f;
     float PendingYaw = 0.0f;
+
+    FVector AutonomousWorldVelocity = FVector::ZeroVector;
+    float AutonomousTargetYawDeg = 0.0f;
+    bool bHasAutonomousCmd = false;
 };

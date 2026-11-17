@@ -35,7 +35,7 @@ public:
 
     /** Duration of the hiding headstart in seconds */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rules")
-    float HidingHeadstartSeconds = 15.0f;
+    float HidingHeadstartSeconds = 10.0f;
 
     /** Total round duration in seconds */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rules")
@@ -43,7 +43,11 @@ public:
 
     /** Distance threshold in meters for successful capture */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rules")
-    float CaptureDistanceThresholdMeters = 2.5f;
+    float CaptureDistanceThresholdMeters = 3.0f;
+
+    /** Enable autonomous AI for both Seeker and Hider immediately on Play */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Rules|AI")
+    bool bEnableAutonomousAI = true;
 
     // ── Current State ──
 
@@ -79,5 +83,14 @@ private:
 
     void FindDrones();
     void CheckCaptureCondition();
+    void UpdateAutonomousAI(float DeltaTime);
+    FVector ComputeObstacleAvoidance(AUnderwaterDrone* Drone, const FVector& DesiredDir) const;
+
+    TArray<FVector> SearchWaypoints;
+    int32 CurrentWaypointIdx = 0;
+    FVector LastKnownHiderPos = FVector::ZeroVector;
+    float TimeSinceLastDetection = 999.0f;
+    bool bHasDetectedHider = false;
+    FString SeekerAIState = TEXT("IDLE");
 };
 

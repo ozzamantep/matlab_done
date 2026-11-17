@@ -14,6 +14,9 @@ class UIMUSensorComponent;
 class UDepthSensorComponent;
 class UDVLSensorComponent;
 
+class FSocket;
+class FInternetAddr;
+
 UCLASS(ClassGroup=(Custom), meta=(BlueprintSpawnableComponent))
 class UNDERWATERSIM_API UROS2BridgeComponent : public UActorComponent
 {
@@ -33,6 +36,16 @@ public:
     /** Odometry publish frequency in Hz */
     UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ROS2")
     float OdomPublishRateHz = 30.0f;
+
+    /** UDP telemetry target IP & Port (for MATLAB / ROS 2 UDP bridge) */
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ROS2|UDP")
+    FString TelemetryTargetIP = TEXT("127.0.0.1");
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ROS2|UDP")
+    int32 TelemetryTargetPort = 9000;
+
+    UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "ROS2|UDP")
+    int32 CmdVelListenPort = 9001;
 
     // ── Incoming ROS 2 Commands ──
 
@@ -57,6 +70,7 @@ public:
 
 protected:
     virtual void BeginPlay() override;
+    virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
     UPROPERTY()
@@ -77,6 +91,12 @@ private:
     bool bIsConnected = true;
     float OdomTimer = 0.0f;
 
+    FSocket* SendSocket = nullptr;
+    FSocket* RecvSocket = nullptr;
+    TSharedPtr<FInternetAddr> RemoteAddr;
+
+    void InitUDPSockets();
+    void PollCmdVelUDP();
     void PublishOdometry();
 };
 

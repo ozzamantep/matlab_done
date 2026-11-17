@@ -245,36 +245,82 @@ void AUnderwaterDrone::Tick(float DeltaTime)
             AddControllerPitchInput(-MouseY * 0.6f);
         }
 
-        // Compute desired 3D movement velocity
-        const FRotator ControlRot = PC->GetControlRotation();
-        const FRotator YawOnlyRot(0.0f, ControlRot.Yaw, 0.0f);
+        const bool bHasManualInput =
+            !FMath::IsNearlyZero(PendingSurge) ||
+            !FMath::IsNearlyZero(PendingSway) ||
+            !FMath::IsNearlyZero(PendingHeave);
 
-        // Keep drone body level (Pitch=0, Roll=0) and aligned with camera Yaw
-        SetActorRotation(YawOnlyRot);
+        if (bHasManualInput || !bAutonomousAI || !bHasAutonomousCmd)
+        {
+            // Compute desired 3D movement velocity from player input
+            const FRotator ControlRot = PC->GetControlRotation();
+            const FRotator YawOnlyRot(0.0f, ControlRot.Yaw, 0.0f);
 
-        // Forward vector follows camera pitch so looking down + pressing W also dives!
-        const FVector CamForward = ControlRot.Vector();
-        const FVector RightDir = FRotationMatrix(YawOnlyRot).GetUnitAxis(EAxis::Y);
-        const FVector UpDir = FVector::UpVector;
+            // Keep drone body level (Pitch=0, Roll=0) and aligned with camera Yaw
+            SetActorRotation(YawOnlyRot);
 
-        const float MaxHorizontalSpeed = 650.0f; // 6.5 m/s
-        const float MaxVerticalSpeed = 550.0f;   // 5.5 m/s diving/ascending speed
+            // Forward vector follows camera pitch so looking down + pressing W also dives!
+            const FVector CamForward = ControlRot.Vector();
+            const FVector RightDir = FRotationMatrix(YawOnlyRot).GetUnitAxis(EAxis::Y);
+            const FVector UpDir = FVector::UpVector;
 
-        FVector DesiredVelocity =
-            CamForward * (PendingSurge * MaxHorizontalSpeed) +
-            RightDir * (PendingSway * MaxHorizontalSpeed) +
-            UpDir * (PendingHeave * MaxVerticalSpeed);
+            const float MaxHorizontalSpeed = 650.0f; // 6.5 m/s
+            const float MaxVerticalSpeed = 550.0f;   // 5.5 m/s diving/ascending speed
+
+            FVector DesiredVelocity =
+                CamForward * (PendingSurge * MaxHorizontalSpeed) +
+                RightDir * (PendingSway * MaxHorizontalSpeed) +
+                UpDir * (PendingHeave * MaxVerticalSpeed);
+
+            if (DroneBody && DroneBody->IsSimulatingPhysics())
+            {
+                const FVector CurrentVel = DroneBody->GetPhysicsLinearVelocity();
+                const FVector NewVel = FMath::VInterpTo(CurrentVel, DesiredVelocity, DeltaTime, 6.0f);
+                DroneBody->SetPhysicsLinearVelocity(NewVel);
+                DroneBody->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
+            }
+            else
+            {
+                AddActorWorldOffset(DesiredVelocity * DeltaTime, true);
+            }
+        }
+        else
+        {
+            // Autonomous AI drives this drone while player observes via third-person camera
+            const FRotator CurrentRot = GetActorRotation();
+            const FRotator TargetRot(0.0f, AutonomousTargetYawDeg, 0.0f);
+            SetActorRotation(FMath::RInterpTo(CurrentRot, TargetRot, DeltaTime, 3.5f));
+
+            if (DroneBody && DroneBody->IsSimulatingPhysics())
+            {
+                const FVector CurrentVel = DroneBody->GetPhysicsLinearVelocity();
+                const FVector NewVel = FMath::VInterpTo(CurrentVel, AutonomousWorldVelocity, DeltaTime, 5.0f);
+                DroneBody->SetPhysicsLinearVelocity(NewVel);
+                DroneBody->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
+            }
+            else
+            {
+                AddActorWorldOffset(AutonomousWorldVelocity * DeltaTime, true);
+            }
+        }
+    }
+    else if (bAutonomousAI && bHasAutonomousCmd)
+    {
+        // Non-possessed drone (e.g. Hider) driven autonomously
+        const FRotator CurrentRot = GetActorRotation();
+        const FRotator TargetRot(0.0f, AutonomousTargetYawDeg, 0.0f);
+        SetActorRotation(FMath::RInterpTo(CurrentRot, TargetRot, DeltaTime, 3.5f));
 
         if (DroneBody && DroneBody->IsSimulatingPhysics())
         {
             const FVector CurrentVel = DroneBody->GetPhysicsLinearVelocity();
-            const FVector NewVel = FMath::VInterpTo(CurrentVel, DesiredVelocity, DeltaTime, 6.0f);
+            const FVector NewVel = FMath::VInterpTo(CurrentVel, AutonomousWorldVelocity, DeltaTime, 5.0f);
             DroneBody->SetPhysicsLinearVelocity(NewVel);
             DroneBody->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
         }
         else
         {
-            AddActorWorldOffset(DesiredVelocity * DeltaTime, true);
+            AddActorWorldOffset(AutonomousWorldVelocity * DeltaTime, true);
         }
     }
 
@@ -336,6 +382,13 @@ void AUnderwaterDrone::SetYaw(float Value)
 {
     PendingYaw = FMath::Clamp(Value, -1.0f, 1.0f);
     ApplyMixedThrusterInputs();
+}
+
+void AUnderwaterDrone::SetAutonomousVelocity(const FVector& WorldVelocityCmPerSec, float TargetYawDeg)
+{
+    AutonomousWorldVelocity = WorldVelocityCmPerSec;
+    AutonomousTargetYawDeg = TargetYawDeg;
+    bHasAutonomousCmd = true;
 }
 
 void AUnderwaterDrone::StopAllThrusters()

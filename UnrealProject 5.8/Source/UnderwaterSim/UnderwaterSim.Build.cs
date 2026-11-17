@@ -28,7 +28,9 @@ public class UnderwaterSim : ModuleRules
             "InputCore",
             "PhysicsCore",
             "Niagara",
-            "Water"
+            "Water",
+            "Sockets",
+            "Networking"
         });
 
         PrivateDependencyModuleNames.AddRange(new string[]
