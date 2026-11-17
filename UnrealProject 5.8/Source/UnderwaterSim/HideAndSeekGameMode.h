@@ -95,6 +95,8 @@ private:
     float RetargetCoverTimer = 0.0f;
     int32 CurrentWaypointIdx = 0;
     FVector LastKnownHiderPos = FVector::ZeroVector;
+    FVector LastSeekerCheckPos = FVector::ZeroVector;
+    float SeekerStuckTimer = 0.0f;
     float TimeSinceLastDetection = 999.0f;
     bool bHasDetectedHider = false;
     FString SeekerAIState = TEXT("IDLE");

@@ -350,7 +350,7 @@ FVector AHideAndSeekGameMode::ComputeObstacleAvoidance(AUnderwaterDrone* Drone, 
     if (!Drone || !GetWorld()) return DesiredDir;
 
     const FVector Start = Drone->GetActorLocation();
-    const float TraceDist = 160.0f; // Compact 1.6m feeler so drones glide easily between buildings
+    const float TraceDist = 140.0f; // Tight 1.4m feeler: only steers right before touching wall
     FCollisionQueryParams Params;
     Params.AddIgnoredActor(Drone);
 
@@ -369,7 +369,14 @@ FVector AHideAndSeekGameMode::ComputeObstacleAvoidance(AUnderwaterDrone* Drone, 
             if (Cast<AUnderwaterDrone>(Hit.GetActor()) == nullptr)
             {
                 const float Strength = 1.0f - (Hit.Distance / TraceDist);
-                Repulsion += Hit.ImpactNormal * (Strength * 0.9f);
+                const FVector Normal = Hit.ImpactNormal;
+                // Tangential slide around the building so the drone NEVER cancels out and gets stuck head-on!
+                FVector Tangent = FVector::CrossProduct(Normal, FVector::UpVector).GetSafeNormal();
+                if (FVector::DotProduct(Tangent, DesiredDir) < 0.0f)
+                {
+                    Tangent = -Tangent;
+                }
+                Repulsion += (Normal * 0.6f + Tangent * 1.4f) * Strength;
             }
         }
     }
@@ -510,9 +517,21 @@ void AHideAndSeekGameMode::UpdateAutonomousAI(float DeltaTime)
     }
     else if (SeekerAIState == TEXT("SEARCHING") || SeekerAIState == TEXT("LOST"))
     {
-        SeekerSpeedCm = 440.0f;
+        SeekerSpeedCm = 460.0f;
         if (SeekerAIState == TEXT("SEARCHING") && SearchWaypoints.Num() > 0)
         {
+            // Anti-stuck detector: if Seeker hasn't progressed > 120cm in 1.5s, skip to next waypoint
+            SeekerStuckTimer += DeltaTime;
+            if (SeekerStuckTimer >= 1.5f)
+            {
+                if (FVector::Dist(SeekerPos, LastSeekerCheckPos) < 120.0f)
+                {
+                    CurrentWaypointIdx = (CurrentWaypointIdx + 1) % SearchWaypoints.Num();
+                }
+                LastSeekerCheckPos = SeekerPos;
+                SeekerStuckTimer = 0.0f;
+            }
+
             GoalPos = SearchWaypoints[CurrentWaypointIdx];
             if (FVector::Dist(SeekerPos, GoalPos) < 550.0f)
             {
