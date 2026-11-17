@@ -99,7 +99,8 @@ private:
     float HiderTurnSign = 1.0f;
     float HiderTurnLockTimer = 0.0f;
     float HiderJukeSign = 1.0f;
-    float HiderJukeTimer = 0.0f;
+    float HiderBrakeTimer = 0.0f;
+    float HiderBrakeCooldown = 0.0f;
     int32 CurrentWaypointIdx = 0;
     FVector LastKnownHiderPos = FVector::ZeroVector;
     FVector LastSeekerCheckPos = FVector::ZeroVector;

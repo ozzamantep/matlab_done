@@ -443,10 +443,11 @@ void AHideAndSeekGameMode::UpdateAutonomousAI(float DeltaTime)
     const FVector HiderPos  = HiderDrone->GetActorLocation();
     CurrentDistanceBetweenDrones = FVector::Dist(SeekerPos, HiderPos) / 100.0f;
 
-    // ── 1. Hider Autonomous Evasion, Cover & Juking ("Gocek") AI ──
+    // ── 1. Hider Autonomous Evasion, Cover & Sudden-Brake Juke AI ──
     {
         RetargetCoverTimer += DeltaTime;
-        HiderJukeTimer += DeltaTime;
+        HiderBrakeCooldown = FMath::Max(0.0f, HiderBrakeCooldown - DeltaTime);
+        HiderBrakeTimer = FMath::Max(0.0f, HiderBrakeTimer - DeltaTime);
         const float DistToCover = FVector::Dist(HiderPos, CurrentHidingSpot);
 
         // Check if Seeker currently has line-of-sight to Hider
@@ -465,7 +466,7 @@ void AHideAndSeekGameMode::UpdateAutonomousAI(float DeltaTime)
                               (bSeekerCanSeeHider || CurrentDistanceBetweenDrones < 18.0f);
 
         if (CurrentHidingSpot.IsZero() ||
-            (bInChase && RetargetCoverTimer > 4.0f) ||
+            (bInChase && RetargetCoverTimer > 4.5f) ||
             RetargetCoverTimer > 18.0f)
         {
             CurrentHidingSpot = PickBestHidingSpot();
@@ -477,24 +478,30 @@ void AHideAndSeekGameMode::UpdateAutonomousAI(float DeltaTime)
 
         if (bInChase)
         {
-            // Active "gocek-gocek" around nearest building + adrenaline burst to break line-of-sight and escape!
-            if (HiderJukeTimer >= 1.4f)
+            // Trigger a sudden brake-stop feint when Seeker closes in (< 11m) so Seeker overshoots!
+            if (HiderBrakeTimer <= 0.0f && HiderBrakeCooldown <= 0.0f && CurrentDistanceBetweenDrones < 11.0f)
             {
+                HiderBrakeTimer = 0.9f;
+                HiderBrakeCooldown = 5.5f;
                 HiderJukeSign = -HiderJukeSign;
-                HiderJukeTimer = 0.0f;
+                CurrentHidingSpot = PickBestHidingSpot();
+                RetargetCoverTimer = 0.0f;
             }
 
-            const FVector OrbitSpot = PickBuildingOrbitSpot();
-            const FVector ToOrbit = (OrbitSpot - HiderPos).GetSafeNormal();
-            const FVector Away = (HiderPos - SeekerPos).GetSafeNormal2D();
-            const FVector Side(-Away.Y, Away.X, 0.0f);
-            const float JukeWeight = (CurrentDistanceBetweenDrones < 12.0f) ? 1.25f : 0.75f;
-            const float VertJuke = 0.35f * FMath::Sin(RoundTimer * 1.8f);
-
-            HiderDir = (ToOrbit * 0.85f + Away * 0.65f + Side * (HiderJukeSign * JukeWeight) + FVector(0.0f, 0.0f, VertJuke)).GetSafeNormal();
-            HiderDir = ComputeObstacleAvoidance(HiderDrone, HiderDir, HiderTurnSign, HiderTurnLockTimer, DeltaTime);
-            // Adrenaline burst when Seeker gets close so Hider can genuinely juke & escape!
-            HiderSpeedCm = (CurrentDistanceBetweenDrones < 12.0f) ? 575.0f : 540.0f;
+            if (HiderBrakeTimer > 0.0f)
+            {
+                // Sudden brake-stop! Turn slightly toward new escape angle while holding position
+                HiderDir = (CurrentHidingSpot - HiderPos).GetSafeNormal();
+                HiderSpeedCm = 20.0f;
+            }
+            else
+            {
+                // Clean, smooth sprint (no zigzag!) around nearest building or to next cover
+                const FVector EscapeTarget = (CurrentDistanceBetweenDrones < 14.0f) ? PickBuildingOrbitSpot() : CurrentHidingSpot;
+                HiderDir = (EscapeTarget - HiderPos).GetSafeNormal();
+                HiderDir = ComputeObstacleAvoidance(HiderDrone, HiderDir, HiderTurnSign, HiderTurnLockTimer, DeltaTime);
+                HiderSpeedCm = 575.0f;
+            }
         }
         else if (DistToCover > 200.0f)
         {
