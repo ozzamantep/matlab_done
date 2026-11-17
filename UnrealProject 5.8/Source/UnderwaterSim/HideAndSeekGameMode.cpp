@@ -5,7 +5,7 @@
 #include "Kismet/GameplayStatics.h"
 #include "GameFramework/PlayerController.h"
 #include "Engine/Engine.h"
-#include "DrawDebugHelpers.h"
+#include "Engine/StaticMeshActor.h"
 #include "InputCoreTypes.h"
 #include "UnderwaterSim.h"
 
@@ -94,6 +94,109 @@ void AHideAndSeekGameMode::FindDrones()
     }
 }
 
+void AHideAndSeekGameMode::FindHidingCovers()
+{
+    HidingCoverActors.Empty();
+    SearchWaypoints.Empty();
+
+    if (!GetWorld()) return;
+
+    TArray<AActor*> MeshActors;
+    UGameplayStatics::GetAllActorsOfClass(GetWorld(), AStaticMeshActor::StaticClass(), MeshActors);
+
+    for (AActor* Actor : MeshActors)
+    {
+        if (!Actor) continue;
+        const FString Name = Actor->GetName();
+        // Skip sky, ground, road, water planes
+        if (Name.Contains(TEXT("Sky")) || Name.Contains(TEXT("Floor")) ||
+            Name.Contains(TEXT("Road")) || Name.Contains(TEXT("Terrain")) ||
+            Name.Contains(TEXT("Water")))
+        {
+            continue;
+        }
+
+        FVector Origin, Extent;
+        Actor->GetActorBounds(true, Origin, Extent);
+        const float MaxExtent = FMath::Max(Extent.X, Extent.Y);
+        if (MaxExtent >= 180.0f && MaxExtent <= 2500.0f && Extent.Z >= 150.0f)
+        {
+            HidingCoverActors.Add(Actor);
+            // Add a patrol waypoint near this building at underwater cruise height
+            const float PatrolZ = FMath::Clamp(Origin.Z + 120.0f, -1500.0f, -450.0f);
+            SearchWaypoints.Add(FVector(Origin.X + MaxExtent + 320.0f, Origin.Y, PatrolZ));
+        }
+    }
+
+    // Fallback waypoints if no buildings found
+    if (SearchWaypoints.Num() == 0)
+    {
+        SearchWaypoints = {
+            FVector(-2500.0f, -2500.0f, -800.0f),
+            FVector( 2500.0f, -2500.0f, -900.0f),
+            FVector( 2500.0f,  2500.0f, -800.0f),
+            FVector(-2500.0f,  2500.0f, -900.0f)
+        };
+    }
+
+    // Shuffle search waypoints so Seeker's patrol is natural and non-monotonous
+    for (int32 i = SearchWaypoints.Num() - 1; i > 0; --i)
+    {
+        const int32 j = FMath::RandRange(0, i);
+        SearchWaypoints.Swap(i, j);
+    }
+
+    UE_LOG(LogUnderwaterSim, Log, TEXT("Found %d building/cover obstacles for Hide-and-Seek!"), HidingCoverActors.Num());
+}
+
+FVector AHideAndSeekGameMode::PickBestHidingSpot() const
+{
+    if (!SeekerDrone || !HidingCoverActors.Num())
+    {
+        return FVector(FMath::RandRange(-2500.0f, 2500.0f), FMath::RandRange(-2500.0f, 2500.0f), -800.0f);
+    }
+
+    const FVector SeekerPos = SeekerDrone->GetActorLocation();
+    const FVector HiderPos  = HiderDrone ? HiderDrone->GetActorLocation() : SeekerPos;
+
+    TArray<FVector> CandidateSpots;
+    for (AActor* Cover : HidingCoverActors)
+    {
+        if (!Cover) continue;
+        FVector Origin, Extent;
+        Cover->GetActorBounds(true, Origin, Extent);
+        const float Radius = FMath::Max(Extent.X, Extent.Y);
+
+        // Spot on the opposite side of the building from Seeker
+        FVector AwayFromSeeker = (Origin - SeekerPos);
+        AwayFromSeeker.Z = 0.0f;
+        if (AwayFromSeeker.IsNearlyZero()) AwayFromSeeker = FVector(1.0f, 0.0f, 0.0f);
+        AwayFromSeeker.Normalize();
+
+        FVector Spot = Origin + AwayFromSeeker * (Radius + 320.0f);
+        Spot.Z = FMath::Clamp(Origin.Z + 80.0f, -1400.0f, -450.0f);
+
+        // Prefer spots reasonably far from Seeker and different from current spot
+        const float DistToSeeker = FVector::Dist(Spot, SeekerPos);
+        const float DistToOld    = FVector::Dist(Spot, CurrentHidingSpot);
+        if (DistToSeeker > 1400.0f && DistToOld > 800.0f)
+        {
+            CandidateSpots.Add(Spot);
+        }
+    }
+
+    if (CandidateSpots.Num() > 0)
+    {
+        return CandidateSpots[FMath::RandRange(0, CandidateSpots.Num() - 1)];
+    }
+
+    // Fallback: pick any building cover at random
+    AActor* RandomCover = HidingCoverActors[FMath::RandRange(0, HidingCoverActors.Num() - 1)];
+    FVector Origin, Extent;
+    RandomCover->GetActorBounds(true, Origin, Extent);
+    return FVector(Origin.X + Extent.X + 320.0f, Origin.Y, FMath::Clamp(Origin.Z, -1400.0f, -450.0f));
+}
+
 void AHideAndSeekGameMode::StartNewMatch()
 {
     RoundTimer = 0.0f;
@@ -102,19 +205,10 @@ void AHideAndSeekGameMode::StartNewMatch()
     TimeSinceLastDetection = 999.0f;
     SeekerAIState = TEXT("IDLE");
     CurrentWaypointIdx = 0;
+    RetargetCoverTimer = 0.0f;
 
-    // 3D Lawnmower patrol waypoints around the underwater arena (UE cm, centered around origin)
-    SearchWaypoints = {
-        FVector(-3500.0f, -3500.0f, -900.0f),
-        FVector( 3500.0f, -3500.0f, -1100.0f),
-        FVector( 3500.0f,  -800.0f, -1300.0f),
-        FVector(-3500.0f,  -800.0f, -1100.0f),
-        FVector(-3500.0f,  1800.0f, -1300.0f),
-        FVector( 3500.0f,  1800.0f, -1100.0f),
-        FVector( 3500.0f,  3800.0f, -900.0f),
-        FVector(-3500.0f,  3800.0f, -1100.0f),
-        FVector(    0.0f,     0.0f, -1400.0f)
-    };
+    FindHidingCovers();
+    CurrentHidingSpot = PickBestHidingSpot();
 
     OnGamePhaseChanged.Broadcast(CurrentPhase);
 
@@ -287,21 +381,37 @@ void AHideAndSeekGameMode::UpdateAutonomousAI(float DeltaTime)
     const FVector HiderPos  = HiderDrone->GetActorLocation();
     CurrentDistanceBetweenDrones = FVector::Dist(SeekerPos, HiderPos) / 100.0f;
 
-    // ── 1. Hider Autonomous Evasion AI (Agile zig-zag + vertical dodge) ──
+    // ── 1. Hider Autonomous Evasion & Building-Cover AI ──
     {
-        FVector AwayDir = (HiderPos - SeekerPos).GetSafeNormal();
-        if (AwayDir.IsNearlyZero()) AwayDir = FVector(-1.0f, -1.0f, 0.0f);
+        RetargetCoverTimer += DeltaTime;
+        const float DistToCover = FVector::Dist(HiderPos, CurrentHidingSpot);
 
-        const FVector Tangential(-AwayDir.Y, AwayDir.X, 0.0f);
-        const float JukeFreq = (CurrentDistanceBetweenDrones < 20.0f) ? 1.15f : 0.55f;
-        const float JukeAmp  = (CurrentDistanceBetweenDrones < 20.0f) ? 0.95f : 0.60f;
-        const float Weave = JukeAmp * FMath::Sin(RoundTimer * JukeFreq);
-        const float VertDodge = 0.35f * FMath::Cos(RoundTimer * 0.8f);
-        FVector HiderDir = (AwayDir + Tangential * Weave + FVector(0.0f, 0.0f, VertDodge)).GetSafeNormal();
-        HiderDir = ComputeObstacleAvoidance(HiderDrone, HiderDir);
+        // Pick a new building to hide behind if Seeker gets too close, or every 14s, or if already exposed
+        if (CurrentHidingSpot.IsZero() ||
+            (CurrentPhase == EGameStatePhase::SeekingPhase && CurrentDistanceBetweenDrones < 14.0f && RetargetCoverTimer > 3.5f) ||
+            RetargetCoverTimer > 16.0f)
+        {
+            CurrentHidingSpot = PickBestHidingSpot();
+            RetargetCoverTimer = 0.0f;
+        }
 
-        const float HiderSpeedCm = (CurrentPhase == EGameStatePhase::HidingPhase) ? 580.0f : 460.0f;
-        const float HiderYaw = HiderDir.Rotation().Yaw;
+        FVector HiderDir = FVector::ZeroVector;
+        float HiderSpeedCm = 0.0f;
+
+        if (DistToCover > 280.0f)
+        {
+            HiderDir = (CurrentHidingSpot - HiderPos).GetSafeNormal();
+            HiderDir = ComputeObstacleAvoidance(HiderDrone, HiderDir);
+            HiderSpeedCm = (CurrentPhase == EGameStatePhase::HidingPhase) ? 560.0f : 470.0f;
+        }
+        else
+        {
+            // Tucked behind building! Gently hover and face away/peek
+            HiderSpeedCm = 60.0f;
+            HiderDir = (HiderPos - SeekerPos).GetSafeNormal2D();
+        }
+
+        const float HiderYaw = HiderDir.IsNearlyZero() ? HiderDrone->GetActorRotation().Yaw : HiderDir.Rotation().Yaw;
         HiderDrone->SetAutonomousVelocity(HiderDir * HiderSpeedCm, HiderYaw);
     }
 
@@ -377,24 +487,15 @@ void AHideAndSeekGameMode::UpdateAutonomousAI(float DeltaTime)
         SeekerSpeedCm = 620.0f;
         const FVector HiderVel = HiderDrone->GetVelocityMetersPerSec() * 100.0f;
         GoalPos = LastKnownHiderPos + HiderVel * 0.65f;
-        if (GetWorld())
-        {
-            DrawDebugSphere(GetWorld(), HiderPos, 110.0f, 12, FColor::Orange, false, 0.08f, 0, 3.0f);
-            DrawDebugLine(GetWorld(), SeekerPos, HiderPos, FColor::Cyan, false, 0.08f, 0, 1.5f);
-        }
     }
     else if (SeekerAIState == TEXT("DETECTED"))
     {
         SeekerSpeedCm = 540.0f;
-        if (GetWorld())
-        {
-            DrawDebugSphere(GetWorld(), HiderPos, 110.0f, 12, FColor::Yellow, false, 0.08f, 0, 2.0f);
-        }
     }
     else if (SeekerAIState == TEXT("SEARCHING") || SeekerAIState == TEXT("LOST"))
     {
         SeekerSpeedCm = 440.0f;
-        if (SearchWaypoints.Num() > 0)
+        if (SeekerAIState == TEXT("SEARCHING") && SearchWaypoints.Num() > 0)
         {
             GoalPos = SearchWaypoints[CurrentWaypointIdx];
             if (FVector::Dist(SeekerPos, GoalPos) < 550.0f)

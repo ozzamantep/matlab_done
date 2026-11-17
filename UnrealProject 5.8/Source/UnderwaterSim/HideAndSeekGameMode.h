@@ -82,12 +82,17 @@ private:
     AUnderwaterDrone* HiderDrone = nullptr;
 
     void FindDrones();
+    void FindHidingCovers();
+    FVector PickBestHidingSpot() const;
     void CheckCaptureCondition();
     void UpdateAutonomousAI(float DeltaTime);
     void UpdateCinematicPOV(float DeltaTime);
     FVector ComputeObstacleAvoidance(AUnderwaterDrone* Drone, const FVector& DesiredDir) const;
 
     TArray<FVector> SearchWaypoints;
+    TArray<AActor*> HidingCoverActors;
+    FVector CurrentHidingSpot = FVector::ZeroVector;
+    float RetargetCoverTimer = 0.0f;
     int32 CurrentWaypointIdx = 0;
     FVector LastKnownHiderPos = FVector::ZeroVector;
     float TimeSinceLastDetection = 999.0f;
