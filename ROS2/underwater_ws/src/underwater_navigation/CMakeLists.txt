@@ -21,8 +21,16 @@ ament_target_dependencies(auv_controller
   underwater_interfaces
 )
 
+add_executable(hider_evasion_node src/hider_evasion_node.cpp)
+ament_target_dependencies(hider_evasion_node
+  rclcpp
+  geometry_msgs
+  nav_msgs
+)
+
 install(TARGETS
   auv_controller
+  hider_evasion_node
   DESTINATION lib/${PROJECT_NAME}
 )
 

@@ -16,5 +16,11 @@ def generate_launch_description():
             name='auv_controller',
             output='screen',
         ),
+        Node(
+            package='underwater_navigation',
+            executable='hider_evasion_node',
+            name='hider_evasion_node',
+            output='screen',
+        ),
     ])
 

@@ -41,9 +41,12 @@ DerivedDataCache/
 # Gazebo
 *.log
 
-# MATLAB (legacy)
+# MATLAB & Simulink
 *.asv
 *.m~
+*.slxc
+*.mexw64
+slprj/
 
 # Files exceeding GitHub's 100 MB single-file hard limit
 coral-block-lighthouse/source/sketchfabTemp.obj.fbx

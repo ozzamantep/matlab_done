@@ -1,71 +1,88 @@
-# Underwater Drone Hide and Seek Simulation (Unreal Engine 5 + ROS 2)
-# akbar tes aja apakah bisa nyanmbung 
-Proyek simulasi skenario taktis **Hide-and-Seek** antara dua Autonomous Underwater Vehicles (AUVs) menggunakan **Unreal Engine 5** untuk simulasi fisik/visual dan **ROS 2** untuk algoritma navigasi, persepsi, dan kontrol otonom.
+# Underwater Drone Hide and Seek — MATLAB & Simulink + UE5/ROS 2
 
-Diadaptasi dari [MathWorks MATLAB/Simulink Challenge Project Hub: Underwater Drone Hide and Seek](https://github.com/mathworks/MATLAB-Simulink-Challenge-Project-Hub/tree/main/projects/Underwater%20Drone%20Hide%20and%20Seek).
+An autonomous multi-AUV **Hide-and-Seek** simulation framework developed for the **[MathWorks MATLAB & Simulink Challenge Project Hub (Project 27)](https://github.com/mathworks/MATLAB-Simulink-Challenge-Project-Hub/tree/main/projects/Underwater%20Drone%20Hide%20and%20Seek)** and the **[MathWorks Global Student Challenge](https://www.mathworks.com/academia/students/competitions/student-challenge/global-student-challenge.html)**.
 
----
-
-## Pembagian Peran Tim (3 Anggota)
-
-| Peran | Penanggung Jawab | Fokus & Tanggung Jawab |
-|---|---|---|
-| **Unreal Engine Engineer** | **Kamu** | - Environment bawah laut & visual effects (ocean currents, turbidity, fog)<br>- Model 3D & fisika drone (BlueROV2 6-DOF vectored thruster)<br>- Buoyancy (Archimedes) & hydrodynamic drag<br>- Sensor simulasi (Sonar, Camera, IMU, Depth, DVL)<br>- Integrasi bridge Unreal Engine ke ROS 2 |
-| **Navigation & Control Engineer** | Anggota 2 | - 6-DOF PID/SMC Motion Controller<br>- 3D Path Planning (A* / RRT*)<br>- Reactive Obstacle Avoidance (Artificial Potential Field)<br>- Evasion trajectory generator untuk Hider |
-| **Perception & AI Engineer** | Anggota 3 | - Sonar pointcloud & acoustic echo filtering<br>- Visual object tracking (YOLO / Kalman Filter)<br>- Search pattern strategy (Lawnmower, spiral, LOS pursuit)<br>- Decision state machine (Search -> Track -> Intercept) |
+The project combines a **ready-to-run MATLAB & Simulink R2025b+ simulation suite** (6-DOF Fossen hydrodynamics, forward-looking acoustic sonar, 3D EKF target tracking, Search/Track/Intercept state machine, APF obstacle avoidance, and Hider evasion AI) with a **ROS 2 + Unreal Engine 5** 3D digital-twin stack.
 
 ---
 
-## Struktur Folder Repositori
+## Key Capabilities & Technical Stack
+
+| Domain | Implementation |
+|---|---|
+| **6-DOF AUV Dynamics** | Fossen marine craft model $M\dot{\nu} + C(\nu)\nu + D(\nu)\nu + g(\eta) = \tau + \tau_{\text{current}}$ with Archimedes buoyancy, quadratic drag, and 3D ocean currents |
+| **Sensor Suite** | Forward-looking 3D acoustic sonar (occlusion + noise), hydrostatic depth/pressure, 9-DOF IMU, 4-beam DVL |
+| **Perception & Tracking** | 6-state 3D Extended Kalman Filter (`EKFTargetTracker`) with covariance propagation during acoustic occlusions |
+| **Autonomous Guidance & Control** | 6-DOF PID controller, 3D Lawnmower/Spiral Search, Lead-Pursuit Intercept, and Artificial Potential Field (APF) obstacle avoidance |
+| **Adversarial Hider AI** | Autonomous evasion strategy using obstacle cover, tangential weaving, and arena boundary repulsion |
+| **Simulink Model** | Closed-loop `UnderwaterHideAndSeek.slx` with Seeker, Hider, Sonar+EKF, and Capture Monitor blocks |
+| **UE5 + ROS 2 Stack** | `UnrealProject 5.8` C++ simulation + `ROS2/underwater_ws` (`underwater_perception`, `underwater_navigation`, `underwater_interfaces`, `underwater_bringup`) |
+
+---
+
+## Repository Structure
 
 ```text
-UNDERWATER-HIDE-AND-SEEK/
-│
-├── UnrealProject/                      # [TANGGUNG JAWAB: UNREAL ENGINE ENGINEER]
-│   ├── UnderwaterSim.uproject          # File project Unreal Engine 5
-│   ├── Content/                        # Asset & Blueprint
-│   │   ├── Maps/                       # Map underwater arena & test tracks
-│   │   ├── Blueprints/                 # BP_UnderwaterDrone, BP_GameMode
-│   │   ├── Drones/                     # Mesh & asset drone BlueROV2
-│   │   ├── Environments/               # Karang, bebatuan, dasar laut, shipwrecks
-│   │   ├── Sensors/                    # Blueprint sensor presets
-│   │   └── Materials/                  # Material air, caustics, post-process
-│   ├── Plugins/                        # rclUE (ROS 2 plugin)
-│   └── Source/UnderwaterSim/           # C++ Core Simulation Source
-│       ├── Drone/                      # Buoyancy, Thrusters, Pawn Core
-│       ├── Sensors/                    # Sonar, IMU, Depth, DVL
-│       ├── Environment/                # Arus laut (currents) & efek optik
-│       ├── ROS2Integration/            # Bridge subscriber/publisher
-│       └── HideAndSeekGameMode.*       # Logika aturan hide & seek
-│
-├── ROS2/
-│   └── underwater_ws/
-│       └── src/
-│           ├── underwater_interfaces/  # Custom msg (SonarScan, DroneState) & srv
-│           ├── underwater_navigation/  # [ANGGOTA 2] Path planning & control
-│           ├── underwater_perception/  # [ANGGOTA 3] Object detection & tracking
-│           └── underwater_bringup/     # Launch files & parameter configs
-│
-├── docs/
-│   ├── architecture.md                 # Detail sistem, gaya fisika, dan sensor
-│   ├── installation.md                 # Panduan instalasi UE5, ROS 2, dan rclUE
-│   ├── communication.md                # Mapping topik ROS 2 dan sistem koordinat
-│   └── testing.md                      # Panduan pengujian fisika dan game loop
-│
-└── README.md
+├── MATLAB/
+│   ├── +auv/                   # BlueROV2Params.m, FossenDynamics.m (6-DOF RK4)
+│   ├── +sim/                   # UnderwaterArena.m (terrain, obstacles, ocean currents)
+│   ├── +sensors/               # SonarModel.m, DepthIMUDVL.m
+│   ├── +perception/            # EKFTargetTracker.m
+│   ├── +navigation/            # PIDController6DOF.m, SeekerAI.m, HiderAI.m
+│   ├── run_hide_and_seek.m     # Interactive 3D simulation & live telemetry
+│   ├── run_benchmark.m         # Monte Carlo evaluation & summary plots
+│   ├── build_simulink_model.m  # Programmatic generator for UnderwaterHideAndSeek.slx
+│   └── UnderwaterHideAndSeek.slx
+├── ROS2/underwater_ws/src/
+│   ├── underwater_interfaces/  # SonarScan.msg, SonarPing.msg, DroneState.msg, ResetMatch.srv
+│   ├── underwater_perception/  # sonar_target_tracker (EKF + Search/Track/Intercept)
+│   ├── underwater_navigation/  # auv_controller (6-DOF + APF) & hider_evasion_node
+│   └── underwater_bringup/     # simulation.launch.py
+├── UnrealProject 5.8/          # Unreal Engine 5.8 C++ underwater simulator
+└── docs/                       # Architecture, installation, communication, testing guides
 ```
 
 ---
 
-## Cara Menjalankan
+## Quick Start (MATLAB & Simulink)
 
-1. **Buka Project Unreal Engine:**
-   - Double-click `UnrealProject/UnderwaterSim.uproject` di Unreal Engine 5.3+.
-   - Buka Level `Content/Maps/UnderwaterArena`.
-2. **Build ROS 2 Interface:**
+Open MATLAB (R2025b or newer) in the `MATLAB/` folder:
+
+1. **Run the Interactive 3D Hide-and-Seek Simulation:**
+   ```matlab
+   cd MATLAB
+   results = run_hide_and_seek();
+   ```
+2. **Run the Monte Carlo Benchmark (5+ randomized trials):**
+   ```matlab
+   summary = run_benchmark(5);
+   ```
+   Generates `MATLAB/results/benchmark_summary.png` with distance profile, 3D intercept trajectory, Capture Rate, Mean Time-to-Capture, and EKF Position RMSE.
+3. **Open & Run the Simulink Model:**
+   ```matlab
+   build_simulink_model();      % Rebuilds UnderwaterHideAndSeek.slx if needed
+   out = sim('UnderwaterHideAndSeek');
+   ```
+
+---
+
+## Benchmark Results (5 Monte Carlo Trials, MATLAB R2025b)
+
+- **Seeker Capture Rate:** `100.0%`
+- **Mean Time-to-Capture:** `103.28 s`
+- **Mean EKF Position RMSE:** `0.31 m`
+- **Mean Thruster Effort:** `34.67 N`
+
+---
+
+## Quick Start (ROS 2 + Unreal Engine 5)
+
+1. Open `UnrealProject 5.8/UnderwaterSim.uproject` in Unreal Engine 5.8 and load `UnderwaterArena`.
+2. Build and launch the ROS 2 stack (ROS 2 Jazzy / Humble):
    ```bash
    cd ROS2/underwater_ws
    colcon build
    source install/setup.bash
+   ros2 launch underwater_bringup simulation.launch.py
    ```
-3. Detail lengkap silakan cek folder [docs/](docs/).
+3. See [docs/](docs/) for full setup, topic mapping, and testing instructions.
