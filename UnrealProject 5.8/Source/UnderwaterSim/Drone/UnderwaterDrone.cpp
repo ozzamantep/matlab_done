@@ -84,6 +84,7 @@ AUnderwaterDrone::AUnderwaterDrone()
 
     // ── Thrusters (BlueROV2 Heavy vectored layout) ──
     SetupThrusters();
+    InitPropellersAndBubbles();
 }
 
 void AUnderwaterDrone::SetupThrusters()
@@ -348,6 +349,7 @@ void AUnderwaterDrone::Tick(float DeltaTime)
     }
 
     ApplyMixedThrusterInputs();
+    UpdatePropellersAndBubbles(DeltaTime);
 
     // Reset per-frame input accumulators
     PendingSurge = 0.0f;
@@ -423,6 +425,128 @@ void AUnderwaterDrone::UpdateCinematicCamera(float TargetArmLength, float Target
     if (FollowCamera)
     {
         FollowCamera->SetFieldOfView(FMath::FInterpTo(FollowCamera->FieldOfView, TargetFOV, DeltaTime, 3.0f));
+    }
+}
+
+void AUnderwaterDrone::InitPropellersAndBubbles()
+{
+    static ConstructorHelpers::FObjectFinder<UStaticMesh> CubeFinder(TEXT("/Engine/BasicShapes/Cube.Cube"));
+    static ConstructorHelpers::FObjectFinder<UStaticMesh> SphereFinder(TEXT("/Engine/BasicShapes/Sphere.Sphere"));
+
+    auto CreatePropHub = [&](const TCHAR* HubName, const FVector& LocalPos) -> USceneComponent*
+    {
+        USceneComponent* Hub = CreateDefaultSubobject<USceneComponent>(HubName);
+        Hub->SetupAttachment(DroneBody);
+        Hub->SetRelativeLocation(LocalPos);
+
+        if (CubeFinder.Succeeded())
+        {
+            for (int32 b = 0; b < 2; ++b)
+            {
+                const FName BladeName(*FString::Printf(TEXT("%s_Blade%d"), HubName, b));
+                UStaticMeshComponent* Blade = CreateDefaultSubobject<UStaticMeshComponent>(BladeName);
+                Blade->SetupAttachment(Hub);
+                Blade->SetStaticMesh(CubeFinder.Object);
+                Blade->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+                Blade->SetCastShadow(false);
+                Blade->SetRelativeScale3D(b == 0 ? FVector(0.03f, 0.28f, 0.06f) : FVector(0.03f, 0.06f, 0.28f));
+                Blade->SetRelativeRotation(FRotator(0.0f, 0.0f, b == 0 ? 15.0f : -15.0f));
+            }
+        }
+        return Hub;
+    };
+
+    PropellerHubLeft  = CreatePropHub(TEXT("PropellerHubLeft"),  FVector(-82.0f, -34.0f, -6.0f));
+    PropellerHubRight = CreatePropHub(TEXT("PropellerHubRight"), FVector(-82.0f,  34.0f, -6.0f));
+
+    // Pooled bubble spheres for directional underwater thruster wake
+    BubblePool.SetNum(24);
+    for (int32 i = 0; i < BubblePool.Num(); ++i)
+    {
+        const FName BName(*FString::Printf(TEXT("ThrusterBubble_%d"), i));
+        UStaticMeshComponent* BMesh = CreateDefaultSubobject<UStaticMeshComponent>(BName);
+        BMesh->SetupAttachment(DroneBody);
+        if (SphereFinder.Succeeded())
+        {
+            BMesh->SetStaticMesh(SphereFinder.Object);
+        }
+        BMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+        BMesh->SetCastShadow(false);
+        BMesh->SetVisibility(false, false);
+        BMesh->SetHiddenInGame(true, false);
+        BMesh->SetUsingAbsoluteLocation(true);
+        BMesh->SetUsingAbsoluteRotation(true);
+        BMesh->SetUsingAbsoluteScale(true);
+        BubblePool[i].Mesh = BMesh;
+        BubblePool[i].Age = 99.0f;
+    }
+}
+
+void AUnderwaterDrone::UpdatePropellersAndBubbles(float DeltaTime)
+{
+    const FVector Vel = GetVelocityMetersPerSec() * 100.0f; // cm/s
+    const float Speed = Vel.Size();
+    const float ForwardSpeed = FVector::DotProduct(Vel, GetActorForwardVector());
+
+    // Spin both rear propellers proportionally to thrust/speed (reverses if braking/reversing)
+    const float SpinSign = (ForwardSpeed >= -10.0f) ? 1.0f : -1.0f;
+    const float SpinRateDeg = SpinSign * (240.0f + Speed * 3.8f);
+    if (PropellerHubLeft)  PropellerHubLeft->AddLocalRotation(FRotator(0.0f, 0.0f, SpinRateDeg * DeltaTime));
+    if (PropellerHubRight) PropellerHubRight->AddLocalRotation(FRotator(0.0f, 0.0f, -SpinRateDeg * DeltaTime));
+
+    // Emit bubbles behind propellers opposite to drone velocity / thrust direction
+    const float SpawnInterval = FMath::Clamp(0.11f - (Speed / 700.0f) * 0.085f, 0.025f, 0.11f);
+    BubbleSpawnTimer += DeltaTime;
+    if (BubbleSpawnTimer >= SpawnInterval && BubblePool.Num() > 0)
+    {
+        BubbleSpawnTimer = 0.0f;
+        USceneComponent* Hub = (NextBubbleIdx % 2 == 0) ? PropellerHubLeft : PropellerHubRight;
+        if (Hub)
+        {
+            FBubbleParticle& B = BubblePool[NextBubbleIdx];
+            NextBubbleIdx = (NextBubbleIdx + 1) % BubblePool.Num();
+
+            FVector ExhaustDir = -GetActorForwardVector();
+            if (Speed > 40.0f)
+            {
+                ExhaustDir = -Vel.GetSafeNormal();
+            }
+
+            const FVector Jitter(FMath::FRandRange(-14.0f, 14.0f), FMath::FRandRange(-14.0f, 14.0f), FMath::FRandRange(-10.0f, 10.0f));
+            B.WorldPos = Hub->GetComponentLocation() + Jitter * 0.5f;
+            B.WorldVel = ExhaustDir * FMath::Max(140.0f, Speed * 0.55f) + FVector(Jitter.X * 2.5f, Jitter.Y * 2.5f, 75.0f + FMath::FRandRange(10.0f, 45.0f));
+            B.Age = 0.0f;
+            B.MaxLife = FMath::FRandRange(0.45f, 0.85f);
+            B.BaseScale = FMath::FRandRange(0.06f, 0.13f);
+
+            if (B.Mesh)
+            {
+                B.Mesh->SetWorldLocation(B.WorldPos);
+                B.Mesh->SetWorldScale3D(FVector(B.BaseScale));
+                B.Mesh->SetVisibility(true, false);
+                B.Mesh->SetHiddenInGame(false, false);
+            }
+        }
+    }
+
+    // Update active bubbles (buoyant rise + drag + shrink)
+    for (FBubbleParticle& B : BubblePool)
+    {
+        if (!B.Mesh || B.Age >= B.MaxLife) continue;
+
+        B.Age += DeltaTime;
+        if (B.Age >= B.MaxLife)
+        {
+            B.Mesh->SetVisibility(false, false);
+            B.Mesh->SetHiddenInGame(true, false);
+            continue;
+        }
+
+        B.WorldVel = FMath::VInterpTo(B.WorldVel, FVector(0.0f, 0.0f, 95.0f), DeltaTime, 2.5f);
+        B.WorldPos += B.WorldVel * DeltaTime;
+        const float Alpha = 1.0f - (B.Age / B.MaxLife);
+        B.Mesh->SetWorldLocation(B.WorldPos);
+        B.Mesh->SetWorldScale3D(FVector(B.BaseScale * Alpha));
     }
 }
 

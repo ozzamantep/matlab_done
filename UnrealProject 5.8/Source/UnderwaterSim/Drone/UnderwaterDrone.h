@@ -81,6 +81,12 @@ public:
     UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Drone|Thrusters")
     UThrusterComponent* ThrusterVR; // Vertical Right
 
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Drone|Propellers")
+    USceneComponent* PropellerHubLeft;
+
+    UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Drone|Propellers")
+    USceneComponent* PropellerHubRight;
+
     // ── Game Properties ──
 
     /** Role of this drone in the hide-and-seek game */
@@ -163,4 +169,21 @@ private:
     FVector SmoothedVelocity = FVector::ZeroVector;
     float AutonomousTargetYawDeg = 0.0f;
     bool bHasAutonomousCmd = false;
+
+    // ── Propellers & Bubble Trail Pool ──
+    struct FBubbleParticle
+    {
+        UStaticMeshComponent* Mesh = nullptr;
+        FVector WorldPos = FVector::ZeroVector;
+        FVector WorldVel = FVector::ZeroVector;
+        float Age = 0.0f;
+        float MaxLife = 0.8f;
+        float BaseScale = 0.08f;
+    };
+    TArray<FBubbleParticle> BubblePool;
+    int32 NextBubbleIdx = 0;
+    float BubbleSpawnTimer = 0.0f;
+
+    void InitPropellersAndBubbles();
+    void UpdatePropellersAndBubbles(float DeltaTime);
 };
