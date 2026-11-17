@@ -65,13 +65,22 @@ AUnderwaterDrone::AUnderwaterDrone()
     // ── Buoyancy ──
     BuoyancyComp = CreateDefaultSubobject<UAUVBuoyancyComponent>(TEXT("Buoyancy"));
 
-    // ── Camera (third-person follow for debugging/viewing) ──
+    // ── Camera (cinematic third-person chase camera with smooth lag) ──
     CameraBoom = CreateDefaultSubobject<USpringArmComponent>(TEXT("CameraBoom"));
     CameraBoom->SetupAttachment(RootComponent);
-    CameraBoom->TargetArmLength = 350.0f;
-    CameraBoom->SetRelativeLocation(FVector(0.0f, 0.0f, 40.0f));
+    CameraBoom->TargetArmLength = 420.0f;
+    CameraBoom->SetRelativeLocation(FVector(0.0f, 0.0f, 65.0f));
     CameraBoom->bUsePawnControlRotation = true;
     CameraBoom->bDoCollisionTest = false;
+    CameraBoom->bEnableCameraLag = true;
+    CameraBoom->CameraLagSpeed = 5.0f;
+    CameraBoom->bEnableCameraRotationLag = true;
+    CameraBoom->CameraRotationLagSpeed = 6.0f;
+
+    FollowCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("FollowCamera"));
+    FollowCamera->SetupAttachment(CameraBoom, USpringArmComponent::SocketName);
+    FollowCamera->bUsePawnControlRotation = false;
+    FollowCamera->SetFieldOfView(92.0f);
 
     FollowCamera = CreateDefaultSubobject<UCameraComponent>(TEXT("FollowCamera"));
     FollowCamera->SetupAttachment(CameraBoom, USpringArmComponent::SocketName);
@@ -286,15 +295,26 @@ void AUnderwaterDrone::Tick(float DeltaTime)
         }
         else
         {
-            // Autonomous AI drives this drone while player observes via third-person camera
+            // Autonomous AI drives this drone while player observes via cinematic chase camera
             const FRotator CurrentRot = GetActorRotation();
             const FRotator TargetRot(0.0f, AutonomousTargetYawDeg, 0.0f);
-            SetActorRotation(FMath::RInterpTo(CurrentRot, TargetRot, DeltaTime, 3.5f));
+            const FRotator NewRot = FMath::RInterpTo(CurrentRot, TargetRot, DeltaTime, 4.5f);
+            SetActorRotation(NewRot);
+
+            // Subtle banking/pitching on VisualMesh for fluid underwater motion feel
+            if (VisualMesh)
+            {
+                const float YawDelta = FMath::FindDeltaAngleDegrees(CurrentRot.Yaw, AutonomousTargetYawDeg);
+                const float BankRoll = FMath::Clamp(YawDelta * 0.35f, -18.0f, 18.0f);
+                const float SpeedPitch = FMath::Clamp(-AutonomousWorldVelocity.Z * 0.03f, -15.0f, 15.0f);
+                const FRotator TargetVisualRot(BankRoll, -90.0f, SpeedPitch);
+                VisualMesh->SetRelativeRotation(FMath::RInterpTo(VisualMesh->GetRelativeRotation(), TargetVisualRot, DeltaTime, 6.0f));
+            }
 
             if (DroneBody && DroneBody->IsSimulatingPhysics())
             {
                 const FVector CurrentVel = DroneBody->GetPhysicsLinearVelocity();
-                const FVector NewVel = FMath::VInterpTo(CurrentVel, AutonomousWorldVelocity, DeltaTime, 5.0f);
+                const FVector NewVel = FMath::VInterpTo(CurrentVel, AutonomousWorldVelocity, DeltaTime, 6.5f);
                 DroneBody->SetPhysicsLinearVelocity(NewVel);
                 DroneBody->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
             }
@@ -309,12 +329,21 @@ void AUnderwaterDrone::Tick(float DeltaTime)
         // Non-possessed drone (e.g. Hider) driven autonomously
         const FRotator CurrentRot = GetActorRotation();
         const FRotator TargetRot(0.0f, AutonomousTargetYawDeg, 0.0f);
-        SetActorRotation(FMath::RInterpTo(CurrentRot, TargetRot, DeltaTime, 3.5f));
+        SetActorRotation(FMath::RInterpTo(CurrentRot, TargetRot, DeltaTime, 4.5f));
+
+        if (VisualMesh)
+        {
+            const float YawDelta = FMath::FindDeltaAngleDegrees(CurrentRot.Yaw, AutonomousTargetYawDeg);
+            const float BankRoll = FMath::Clamp(YawDelta * 0.35f, -18.0f, 18.0f);
+            const float SpeedPitch = FMath::Clamp(-AutonomousWorldVelocity.Z * 0.03f, -15.0f, 15.0f);
+            const FRotator TargetVisualRot(BankRoll, -90.0f, SpeedPitch);
+            VisualMesh->SetRelativeRotation(FMath::RInterpTo(VisualMesh->GetRelativeRotation(), TargetVisualRot, DeltaTime, 6.0f));
+        }
 
         if (DroneBody && DroneBody->IsSimulatingPhysics())
         {
             const FVector CurrentVel = DroneBody->GetPhysicsLinearVelocity();
-            const FVector NewVel = FMath::VInterpTo(CurrentVel, AutonomousWorldVelocity, DeltaTime, 5.0f);
+            const FVector NewVel = FMath::VInterpTo(CurrentVel, AutonomousWorldVelocity, DeltaTime, 6.5f);
             DroneBody->SetPhysicsLinearVelocity(NewVel);
             DroneBody->SetPhysicsAngularVelocityInDegrees(FVector::ZeroVector);
         }
@@ -389,6 +418,18 @@ void AUnderwaterDrone::SetAutonomousVelocity(const FVector& WorldVelocityCmPerSe
     AutonomousWorldVelocity = WorldVelocityCmPerSec;
     AutonomousTargetYawDeg = TargetYawDeg;
     bHasAutonomousCmd = true;
+}
+
+void AUnderwaterDrone::UpdateCinematicCamera(float TargetArmLength, float TargetFOV, float DeltaTime)
+{
+    if (CameraBoom)
+    {
+        CameraBoom->TargetArmLength = FMath::FInterpTo(CameraBoom->TargetArmLength, TargetArmLength, DeltaTime, 3.0f);
+    }
+    if (FollowCamera)
+    {
+        FollowCamera->SetFieldOfView(FMath::FInterpTo(FollowCamera->FieldOfView, TargetFOV, DeltaTime, 3.0f));
+    }
 }
 
 void AUnderwaterDrone::StopAllThrusters()

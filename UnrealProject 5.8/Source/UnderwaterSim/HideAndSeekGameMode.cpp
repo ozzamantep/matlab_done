@@ -5,6 +5,8 @@
 #include "Kismet/GameplayStatics.h"
 #include "GameFramework/PlayerController.h"
 #include "Engine/Engine.h"
+#include "DrawDebugHelpers.h"
+#include "InputCoreTypes.h"
 #include "UnderwaterSim.h"
 
 AHideAndSeekGameMode::AHideAndSeekGameMode()
@@ -160,6 +162,8 @@ void AHideAndSeekGameMode::Tick(float DeltaTime)
         UpdateAutonomousAI(DeltaTime);
     }
 
+    UpdateCinematicPOV(DeltaTime);
+
     if (CurrentPhase == EGameStatePhase::SeekingPhase)
     {
         CheckCaptureCondition();
@@ -168,11 +172,65 @@ void AHideAndSeekGameMode::Tick(float DeltaTime)
     if (GEngine)
     {
         const FString PhaseStr = (CurrentPhase == EGameStatePhase::HidingPhase) ? TEXT("HIDING (Headstart)") : TEXT("SEEKING");
+        const FString POVStr = (CameraPOVMode == 0) ? TEXT("Action Chase") :
+                               (CameraPOVMode == 1) ? TEXT("Hider Evasion") : TEXT("Wide Tactical");
         const FString HUD = FString::Printf(
-            TEXT("Hide & Seek | Phase: %s | Seeker AI: %s | Time: %.1fs / %.0fs | Dist: %.2fm"),
-            *PhaseStr, *SeekerAIState, RoundTimer, MaxRoundDurationSeconds, CurrentDistanceBetweenDrones);
+            TEXT("Hide & Seek | %s | AI: %s | Time: %.1fs | Dist: %.2fm | POV [V]: %s"),
+            *PhaseStr, *SeekerAIState, RoundTimer, CurrentDistanceBetweenDrones, *POVStr);
         GEngine->AddOnScreenDebugMessage(1, 0.1f, FColor::Cyan, HUD);
     }
+}
+
+void AHideAndSeekGameMode::UpdateCinematicPOV(float DeltaTime)
+{
+    APlayerController* PC = GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr;
+    if (!PC || !SeekerDrone || !HiderDrone) return;
+
+    const bool bVDown = PC->IsInputKeyDown(EKeys::V);
+    if (bVDown && !bPrevVKeyDown)
+    {
+        CameraPOVMode = (CameraPOVMode + 1) % 3;
+        AUnderwaterDrone* TargetPawn = (CameraPOVMode == 1) ? HiderDrone : SeekerDrone;
+        if (PC->GetPawn() != TargetPawn)
+        {
+            PC->Possess(TargetPawn);
+        }
+    }
+    bPrevVKeyDown = bVDown;
+
+    AUnderwaterDrone* ActiveDrone = Cast<AUnderwaterDrone>(PC->GetPawn());
+    if (!ActiveDrone) return;
+
+    // Smoothly steer camera to frame the chase unless player moves mouse
+    float MouseX = 0.0f, MouseY = 0.0f;
+    PC->GetInputMouseDelta(MouseX, MouseY);
+    const bool bMouseMoving = !FMath::IsNearlyZero(MouseX, 0.05f) || !FMath::IsNearlyZero(MouseY, 0.05f);
+
+    if (!bMouseMoving)
+    {
+        FRotator DesiredCamRot = ActiveDrone->GetActorRotation();
+        if (CameraPOVMode == 0 && (SeekerAIState == TEXT("DETECTED") || SeekerAIState == TEXT("APPROACHING")))
+        {
+            // Frame both Seeker and Hider in the chase!
+            const FVector ToHider = (HiderDrone->GetActorLocation() - SeekerDrone->GetActorLocation()).GetSafeNormal();
+            DesiredCamRot = ToHider.Rotation();
+        }
+        else if (CameraPOVMode == 1)
+        {
+            // Hider POV: angle slightly toward Seeker so you see the pursuer chasing you
+            const FVector ToSeeker = (SeekerDrone->GetActorLocation() - HiderDrone->GetActorLocation()).GetSafeNormal();
+            DesiredCamRot = FMath::RInterpTo(ActiveDrone->GetActorRotation(), ToSeeker.Rotation(), 0.35f, 1.0f);
+        }
+
+        DesiredCamRot.Pitch = (CameraPOVMode == 2) ? -32.0f : -16.0f;
+        DesiredCamRot.Roll = 0.0f;
+        PC->SetControlRotation(FMath::RInterpTo(PC->GetControlRotation(), DesiredCamRot, DeltaTime, 3.2f));
+    }
+
+    const float TargetArm = (CameraPOVMode == 2) ? 850.0f :
+                            (SeekerAIState == TEXT("APPROACHING")) ? 480.0f : 420.0f;
+    const float TargetFOV = (SeekerAIState == TEXT("APPROACHING")) ? 102.0f : 92.0f;
+    ActiveDrone->UpdateCinematicCamera(TargetArm, TargetFOV, DeltaTime);
 }
 
 FVector AHideAndSeekGameMode::ComputeObstacleAvoidance(AUnderwaterDrone* Drone, const FVector& DesiredDir) const
@@ -229,17 +287,20 @@ void AHideAndSeekGameMode::UpdateAutonomousAI(float DeltaTime)
     const FVector HiderPos  = HiderDrone->GetActorLocation();
     CurrentDistanceBetweenDrones = FVector::Dist(SeekerPos, HiderPos) / 100.0f;
 
-    // ── 1. Hider Autonomous Evasion AI ──
+    // ── 1. Hider Autonomous Evasion AI (Agile zig-zag + vertical dodge) ──
     {
         FVector AwayDir = (HiderPos - SeekerPos).GetSafeNormal();
         if (AwayDir.IsNearlyZero()) AwayDir = FVector(-1.0f, -1.0f, 0.0f);
 
         const FVector Tangential(-AwayDir.Y, AwayDir.X, 0.0f);
-        const float Weave = 0.55f * FMath::Sin(RoundTimer * 0.45f);
-        FVector HiderDir = (AwayDir + Tangential * Weave + FVector(0.0f, 0.0f, 0.2f * FMath::Sin(RoundTimer * 0.35f))).GetSafeNormal();
+        const float JukeFreq = (CurrentDistanceBetweenDrones < 20.0f) ? 1.15f : 0.55f;
+        const float JukeAmp  = (CurrentDistanceBetweenDrones < 20.0f) ? 0.95f : 0.60f;
+        const float Weave = JukeAmp * FMath::Sin(RoundTimer * JukeFreq);
+        const float VertDodge = 0.35f * FMath::Cos(RoundTimer * 0.8f);
+        FVector HiderDir = (AwayDir + Tangential * Weave + FVector(0.0f, 0.0f, VertDodge)).GetSafeNormal();
         HiderDir = ComputeObstacleAvoidance(HiderDrone, HiderDir);
 
-        const float HiderSpeedCm = (CurrentPhase == EGameStatePhase::HidingPhase) ? 380.0f : 310.0f;
+        const float HiderSpeedCm = (CurrentPhase == EGameStatePhase::HidingPhase) ? 580.0f : 460.0f;
         const float HiderYaw = HiderDir.Rotation().Yaw;
         HiderDrone->SetAutonomousVelocity(HiderDir * HiderSpeedCm, HiderYaw);
     }
@@ -308,15 +369,35 @@ void AHideAndSeekGameMode::UpdateAutonomousAI(float DeltaTime)
     }
 
     FVector GoalPos = LastKnownHiderPos;
-    float SeekerSpeedCm = 420.0f; // 4.2 m/s (faster than Hider 3.1 m/s so capture succeeds)
+    float SeekerSpeedCm = 550.0f;
 
-    if (SeekerAIState == TEXT("SEARCHING") || SeekerAIState == TEXT("LOST"))
+    if (SeekerAIState == TEXT("APPROACHING"))
     {
-        SeekerSpeedCm = 350.0f;
+        // Lead-pursuit turbo intercept!
+        SeekerSpeedCm = 620.0f;
+        const FVector HiderVel = HiderDrone->GetVelocityMetersPerSec() * 100.0f;
+        GoalPos = LastKnownHiderPos + HiderVel * 0.65f;
+        if (GetWorld())
+        {
+            DrawDebugSphere(GetWorld(), HiderPos, 110.0f, 12, FColor::Orange, false, 0.08f, 0, 3.0f);
+            DrawDebugLine(GetWorld(), SeekerPos, HiderPos, FColor::Cyan, false, 0.08f, 0, 1.5f);
+        }
+    }
+    else if (SeekerAIState == TEXT("DETECTED"))
+    {
+        SeekerSpeedCm = 540.0f;
+        if (GetWorld())
+        {
+            DrawDebugSphere(GetWorld(), HiderPos, 110.0f, 12, FColor::Yellow, false, 0.08f, 0, 2.0f);
+        }
+    }
+    else if (SeekerAIState == TEXT("SEARCHING") || SeekerAIState == TEXT("LOST"))
+    {
+        SeekerSpeedCm = 440.0f;
         if (SearchWaypoints.Num() > 0)
         {
             GoalPos = SearchWaypoints[CurrentWaypointIdx];
-            if (FVector::Dist(SeekerPos, GoalPos) < 500.0f)
+            if (FVector::Dist(SeekerPos, GoalPos) < 550.0f)
             {
                 CurrentWaypointIdx = (CurrentWaypointIdx + 1) % SearchWaypoints.Num();
                 GoalPos = SearchWaypoints[CurrentWaypointIdx];

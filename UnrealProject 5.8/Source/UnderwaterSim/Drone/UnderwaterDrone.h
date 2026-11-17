@@ -99,6 +99,10 @@ public:
     UFUNCTION(BlueprintCallable, Category = "Drone|Movement")
     void SetAutonomousVelocity(const FVector& WorldVelocityCmPerSec, float TargetYawDeg);
 
+    /** Update camera boom arm length and FOV dynamically for cinematic chase feel */
+    UFUNCTION(BlueprintCallable, Category = "Drone|Camera")
+    void UpdateCinematicCamera(float TargetArmLength, float TargetFOV, float DeltaTime);
+
     // ── Movement API ──
 
     /** Move forward/backward (-1 to 1) */

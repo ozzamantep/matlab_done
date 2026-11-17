@@ -84,6 +84,7 @@ private:
     void FindDrones();
     void CheckCaptureCondition();
     void UpdateAutonomousAI(float DeltaTime);
+    void UpdateCinematicPOV(float DeltaTime);
     FVector ComputeObstacleAvoidance(AUnderwaterDrone* Drone, const FVector& DesiredDir) const;
 
     TArray<FVector> SearchWaypoints;
@@ -92,5 +93,7 @@ private:
     float TimeSinceLastDetection = 999.0f;
     bool bHasDetectedHider = false;
     FString SeekerAIState = TEXT("IDLE");
+    int32 CameraPOVMode = 0; // 0: Cinematic Chase, 1: Hider POV, 2: Wide Tactical
+    bool bPrevVKeyDown = false;
 };
 
